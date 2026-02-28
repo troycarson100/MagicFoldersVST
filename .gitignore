@@ -1,0 +1,29 @@
+# Build
+build/
+cmake-build-*/
+*.xcodeproj
+*.xcworkspace
+
+# Dependencies (clone separately; see README)
+JUCE/
+essentia/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+*.dSYM
+
+# JUCE / plugin binaries (optional: keep if you want to track)
+# *.vst3
+# *.component
+# *.app
+
+# Local config
+*.user
+*.suo
