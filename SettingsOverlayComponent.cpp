@@ -71,7 +71,7 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     closeBtn.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible(closeBtn);
 
-    outputFolderTitleLabel.setText("Output", juce::dontSendNotification);
+    outputFolderTitleLabel.setText("Output Folder", juce::dontSendNotification);
     outputFolderTitleLabel.setColour(juce::Label::textColourId, textCharcoal);
     outputFolderTitleLabel.setFont(FinderTheme::interFont(14.0f, true));
     addAndMakeVisible(outputFolderTitleLabel);
@@ -103,43 +103,34 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     tempoSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
     addAndMakeVisible(tempoSectionLabel);
     autoDetectBpmToggle.setButtonText("Auto-detect BPM");
-    autoDetectBpmToggle.onClick = [this] { processor.useHostBpm = !autoDetectBpmToggle.getToggleState(); };
-    addAndMakeVisible(autoDetectBpmToggle);
-    manualBpmLabel.setText("Manual BPM (60–200)", juce::dontSendNotification);
-    manualBpmLabel.setColour(juce::Label::textColourId, textCharcoal);
-    manualBpmLabel.setFont(FinderTheme::interFont(12.0f));
-    addAndMakeVisible(manualBpmLabel);
-    bpmStepper.setRange(60, 200);
-    bpmStepper.onValueChange = [this](int v) {
-        processor.projectBPM = v;
+    autoDetectBpmToggle.onClick = [this] {
+        processor.useHostBpm = !autoDetectBpmToggle.getToggleState();
+        bpmStepper.setEnabled(autoDetectBpmToggle.getToggleState());
     };
+    addAndMakeVisible(autoDetectBpmToggle);
+    bpmStepper.setRange(60, 200);
+    bpmStepper.onValueChange = [this](int v) { processor.projectBPM = v; };
+    bpmStepper.onDoubleClick = [this] { showBpmEditor(); };
     addAndMakeVisible(bpmStepper);
+    content.addChildComponent(bpmPopupEditor);
+    bpmPopupEditor.setMultiLine(false);
+    bpmPopupEditor.setJustification(juce::Justification::centred);
+    bpmPopupEditor.setColour(juce::TextEditor::backgroundColourId, settingsAccent);
+    bpmPopupEditor.setColour(juce::TextEditor::textColourId, textOnDark);
+    bpmPopupEditor.setColour(juce::TextEditor::outlineColourId, settingsDivider);
+    bpmPopupEditor.onReturnKey = [this] { hideBpmEditor(); };
+    bpmPopupEditor.onEscapeKey = [this] { hideBpmEditor(); };
+    bpmPopupEditor.onFocusLost = [this] { hideBpmEditor(); };
 
-    keySectionLabel.setText("Key Detection", juce::dontSendNotification);
-    keySectionLabel.setColour(juce::Label::textColourId, textCharcoal);
-    keySectionLabel.setFont(FinderTheme::interFont(14.0f, true));
-    addAndMakeVisible(keySectionLabel);
     autoDetectKeyToggle.setButtonText("Auto-detect Key");
     autoDetectKeyToggle.onClick = [this] { processor.useProjectKey = !autoDetectKeyToggle.getToggleState(); };
     addAndMakeVisible(autoDetectKeyToggle);
-    manualKeyLabel.setText("Manual Key", juce::dontSendNotification);
-    manualKeyLabel.setColour(juce::Label::textColourId, textCharcoal);
-    manualKeyLabel.setFont(FinderTheme::interFont(12.0f));
-    addAndMakeVisible(manualKeyLabel);
     keyDropdown.setOptions(getKeyList());
     keyDropdown.onChange = [this](int idx) {
         processor.projectKey = getKeyList()[idx];
     };
     addAndMakeVisible(keyDropdown);
 
-    namingSectionLabel.setText("Naming", juce::dontSendNotification);
-    namingSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
-    namingSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
-    addAndMakeVisible(namingSectionLabel);
-    namingFormatLabel.setText("Naming Format", juce::dontSendNotification);
-    namingFormatLabel.setColour(juce::Label::textColourId, textCharcoal);
-    namingFormatLabel.setFont(FinderTheme::interFont(12.0f));
-    addAndMakeVisible(namingFormatLabel);
     namingFormatDropdown.setOptions(getNamingFormatOptions());
     namingFormatDropdown.onChange = [this](int idx) {
         processor.namingFormat = idx;
@@ -173,14 +164,9 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     content.addAndMakeVisible(browseOutputBtn);
     content.addAndMakeVisible(tempoSectionLabel);
     content.addAndMakeVisible(autoDetectBpmToggle);
-    content.addAndMakeVisible(manualBpmLabel);
     content.addAndMakeVisible(bpmStepper);
-    content.addAndMakeVisible(keySectionLabel);
     content.addAndMakeVisible(autoDetectKeyToggle);
-    content.addAndMakeVisible(manualKeyLabel);
     content.addAndMakeVisible(keyDropdown);
-    content.addAndMakeVisible(namingSectionLabel);
-    content.addAndMakeVisible(namingFormatLabel);
     content.addAndMakeVisible(namingFormatDropdown);
     content.addAndMakeVisible(customPrefixLabel);
     content.addAndMakeVisible(customPrefixEditor);
@@ -194,6 +180,7 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
 void SettingsOverlayComponent::syncFromProcessor()
 {
     autoDetectBpmToggle.setToggleState(!processor.useHostBpm, juce::dontSendNotification);
+    bpmStepper.setEnabled(autoDetectBpmToggle.getToggleState());
     bpmStepper.setValue(processor.projectBPM);
     autoDetectKeyToggle.setToggleState(!processor.useProjectKey, juce::dontSendNotification);
     int keyIndex = getKeyList().indexOf(processor.projectKey);
@@ -211,11 +198,34 @@ void SettingsOverlayComponent::syncFromProcessor()
     updateCustomPrefixVisibility();
 }
 
+void SettingsOverlayComponent::showBpmEditor()
+{
+    if (!autoDetectBpmToggle.getToggleState()) return;
+    bpmPopupEditor.setBounds(bpmStepper.getBounds());
+    bpmPopupEditor.setText(juce::String(processor.projectBPM), false);
+    bpmPopupEditor.setVisible(true);
+    bpmPopupEditor.grabKeyboardFocus();
+    bpmPopupEditor.selectAll();
+}
+
+void SettingsOverlayComponent::hideBpmEditor()
+{
+    if (!bpmPopupEditor.isVisible()) return;
+    int v = bpmPopupEditor.getText().getIntValue();
+    if (v >= 60 && v <= 200)
+    {
+        processor.projectBPM = v;
+        bpmStepper.setValue(v);
+    }
+    bpmPopupEditor.setVisible(false);
+    bpmPopupEditor.setText("", false);
+}
+
 void SettingsOverlayComponent::paint(juce::Graphics& g)
 {
     g.fillAll(creamBg);
     juce::Rectangle<int> headerBarRect(0, 0, getWidth(), kHeaderHeight);
-    g.setColour(settingsAccent);
+    g.setColour(topBar);
     g.fillRect(headerBarRect);
     g.setColour(settingsDivider);
     g.fillRect(0, kHeaderHeight - 1, getWidth(), 1);
@@ -237,13 +247,16 @@ void SettingsOverlayComponent::resized()
     scrollViewport.setBounds(0, kHeaderHeight, getWidth(), getHeight() - kHeaderHeight);
     content.setSize(cw, 620);
 
+    constexpr int kExtraPad = 14;
+
     // Output section
     int sectionTop = y;
     outputFolderTitleLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
     y += 26;
-    outputPathLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 100, kRowHeight);
-    browseOutputBtn.setBounds(cw - kContentPad - 92, y - 2, 84, 28);
-    y += kRowHeight + 12;
+    outputPathLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, kRowHeight);
+    y += kRowHeight + 8;
+    browseOutputBtn.setBounds(kContentPad + 12, y, 84, 28);
+    y += 36 + kExtraPad;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
     y += kSectionGap;
 
@@ -253,38 +266,30 @@ void SettingsOverlayComponent::resized()
     y += 26;
     autoDetectBpmToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
     y += 38;
-    manualBpmLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
     bpmStepper.setBounds(kContentPad + 12, y, 180, 36);
-    y += 44;
+    if (bpmPopupEditor.isVisible())
+        bpmPopupEditor.setBounds(bpmStepper.getBounds());
+    y += 36 + kExtraPad;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
     y += kSectionGap;
 
-    // Key Detection section
+    // Key section (no "Key Detection" or "Manual Key" labels)
     sectionTop = y;
-    keySectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
-    y += 26;
     autoDetectKeyToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
     y += 38;
-    manualKeyLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
     keyDropdown.setBounds(kContentPad + 12, y, controlW, 32);
-    y += 40;
+    y += 32 + kExtraPad;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
     y += kSectionGap;
 
-    // Naming section
+    // Naming (no "Naming" or "Naming Format" labels)
     sectionTop = y;
-    namingSectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
-    y += 26;
-    namingFormatLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
     namingFormatDropdown.setBounds(kContentPad + 12, y, controlW, 32);
-    y += 36;
+    y += 32 + kExtraPad;
     customPrefixLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
     y += kRowHeight + 4;
     customPrefixEditor.setBounds(kContentPad + 12, y, controlW, 32);
-    y += 40;
+    y += 32 + kExtraPad;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
     y += kSectionGap;
 

@@ -48,6 +48,7 @@ struct RenameDialogContent : juce::Component
     juce::TextButton okBtn;
     juce::TextButton cancelBtn;
 };
+
 }
 
 static juce::String sanitiseRename(const juce::String& s)
@@ -162,6 +163,72 @@ void ColumnBrowserComponent::cancelRename()
     hideRenameEditor();
 }
 
+void ColumnBrowserComponent::showNewFolderDialog(int column)
+{
+    juce::File parentDir = getParentForColumn(column);
+    if (!parentDir.isDirectory())
+        return;
+    // Create new folder immediately with default name, then open rename so user can name it.
+    juce::String baseName("New Folder");
+    juce::File newDir = parentDir.getChildFile(baseName);
+    int suffix = 0;
+    while (newDir.exists())
+        newDir = parentDir.getChildFile(baseName + " " + juce::String(++suffix));
+    if (!newDir.createDirectory())
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "New Folder",
+            "Could not create the folder. Check permissions and path.",
+            nullptr);
+        return;
+    }
+    juce::String createdPath = newDir.getFullPathName();
+    refreshColumns();
+    if (onPathChanged)
+        onPathChanged();
+    // Defer opening rename so the list has painted and focus is ready.
+    juce::MessageManager::callAsync([this, column, createdPath]()
+    {
+        if (!isVisible())
+            return;
+        refreshColumns();
+        if (onPathChanged)
+            onPathChanged();
+        if (column < 0 || column >= columnItems.size())
+            return;
+        const auto& items = columnItems.getReference(column);
+        int row = -1;
+        juce::String normalCreated = juce::File(createdPath).getFullPathName();
+        for (int i = 0; i < items.size(); ++i)
+        {
+            if (items.getReference(i).getFullPathName() == normalCreated)
+            {
+                row = i;
+                break;
+            }
+        }
+        if (row < 0)
+        {
+            juce::String createdFileName = juce::File(createdPath).getFileName();
+            for (int i = 0; i < items.size(); ++i)
+            {
+                if (items.getReference(i).getFileName() == createdFileName)
+                {
+                    row = i;
+                    break;
+                }
+            }
+        }
+        if (row >= 0)
+        {
+            selectedRowInColumn.set(column, row);
+            repaint();
+            startInlineRename(column, row);
+        }
+    });
+}
+
 void ColumnBrowserComponent::hideRenameEditor()
 {
     if (editingColumn < 0) return;
@@ -209,6 +276,17 @@ juce::File ColumnBrowserComponent::getFileAt(int column, int row) const
     return items.getReference(row);
 }
 
+juce::File ColumnBrowserComponent::getParentForColumn(int column) const
+{
+    if (column == 0)
+        return rootFolder;
+    if (path.isEmpty())
+        return {};
+    if (column == 1)
+        return path.getReference(0);
+    return path.getLast();  // column 2
+}
+
 juce::File ColumnBrowserComponent::getSelectedFileInLastColumn() const
 {
     if (columnItems.isEmpty() || selectedRowInColumn.size() < columnItems.size())
@@ -230,10 +308,10 @@ void ColumnBrowserComponent::refreshColumns()
     }
     struct FileCmp { int compareElements(const juce::File& a, const juce::File& b) const { return a.getFileName().compareNatural(b.getFileName()); } };
     FileCmp cmp;
-    juce::StringArray categories = getDefaultCategories();
     juce::Array<juce::File> col0;
-    for (const auto& name : categories)
-        col0.add(rootFolder.getChildFile(name));
+    for (const auto& f : rootFolder.findChildFiles(juce::File::findDirectories, false))
+        col0.add(f);
+    col0.sort(cmp);
     columnItems.add(col0);
     selectedRowInColumn.add(-1);
 
@@ -356,7 +434,8 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         juce::Rectangle<int> rowRect(bounds.getX(), bounds.getY() + row * kRowHeight, bounds.getWidth(), kRowHeight);
         if (!rowRect.intersects(bounds))
             continue;
-        bool isDir = items.getReference(row).isDirectory();
+        juce::File item = items.getReference(row);
+        bool isDir = item.isDirectory();
         bool isCategoryRow = (columnIndex == 0);
         bool selected = (row == sel);
         if (selected)
@@ -380,8 +459,7 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         juce::Rectangle<int> textRect(textLeft, rowRect.getY() + padV, rowRect.getRight() - textLeft - padH, kRowHeight - 2 * padV);
         if (columnIndex != editingColumn || row != editingRow)
         {
-            juce::String name = items.getReference(row).getFileName();
-            g.drawText(name, textRect, juce::Justification::centredLeft, true);
+            g.drawText(item.getFileName(), textRect, juce::Justification::centredLeft, true);
         }
     }
 }
@@ -433,14 +511,32 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         return;
     int row = e.getPosition().getY() / kRowHeight;
     const auto& items = columnItems.getReference(col);
-    if (row < 0 || row >= items.size())
+    // Click in empty area below folders → show "(+ new folder)" option (Finder-style)
+    if (row >= items.size())
+    {
+        if (getParentForColumn(col).isDirectory())
+        {
+            juce::PopupMenu m;
+            m.addItem(1, "+ new folder");
+            auto opts = juce::PopupMenu::Options()
+                .withTargetComponent(this)
+                .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
+                .withMousePosition();
+            m.showMenuAsync(opts, [this, col](int result) {
+                if (result == 1)
+                    showNewFolderDialog(col);
+            });
+        }
+        return;
+    }
+    if (row < 0)
         return;
 
+    juce::File f = items.getReference(row);
     if (e.mods.isRightButtonDown())
     {
         selectedRowInColumn.set(col, row);
         repaint();
-        juce::File f = items.getReference(row);
         juce::PopupMenu m;
         m.addItem(1, "Rename");
         bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
@@ -461,7 +557,6 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
 
     selectedRowInColumn.set(col, row);
     repaint();
-    juce::File f = items.getReference(row);
     if (f.isDirectory())
     {
         if (onFolderSelected)

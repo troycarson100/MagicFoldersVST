@@ -26,6 +26,7 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseEnter(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent& e) override;
 
@@ -33,6 +34,7 @@ public:
     void setValue(int v);
     void setRange(int minVal, int maxVal);
     std::function<void(int)> onValueChange;
+    std::function<void()> onDoubleClick;
 
 private:
     int value = 120;

@@ -51,7 +51,9 @@ private:
 
     juce::Rectangle<int> getColumnBounds(int column) const;
     juce::Rectangle<int> getTextBoundsForCell(int column, int row) const;
+    juce::File getParentForColumn(int column) const;
     void startInlineRename(int column, int row);
+    void showNewFolderDialog(int column);
     void commitRename();
     void cancelRename();
     void hideRenameEditor();

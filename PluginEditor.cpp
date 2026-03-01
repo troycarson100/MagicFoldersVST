@@ -18,7 +18,7 @@ namespace
     class RenamePackDialogContent : public juce::Component
     {
     public:
-        RenamePackDialogContent(const juce::String& defaultName_, juce::String* resultOut_)
+        RenamePackDialogContent(const juce::String& defaultName_, juce::String* resultOut_ = nullptr)
             : defaultName(defaultName_), resultOut(resultOut_)
         {
             label.setText("Enter a name for the new sample pack:", juce::dontSendNotification);
@@ -29,14 +29,16 @@ namespace
             addAndMakeVisible(te);
             okBtn.setButtonText("OK");
             okBtn.onClick = [this] {
-                if (resultOut)
+                juce::String name = te.getText().trim();
+                if (name.isEmpty()) name = defaultName;
+                if (onOk)
+                    onOk(name);
+                else if (resultOut)
                 {
-                    *resultOut = te.getText().trim();
-                    if (resultOut->isEmpty())
-                        *resultOut = defaultName;
+                    *resultOut = name;
+                    if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                        dw->exitModalState(1);
                 }
-                if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-                    dw->exitModalState(1);
             };
             addAndMakeVisible(okBtn);
             cancelBtn.setButtonText("Cancel");
@@ -47,6 +49,7 @@ namespace
             addAndMakeVisible(cancelBtn);
             setSize(380, 120);
         }
+        void setOnOk(std::function<void(juce::String)> f) { onOk = std::move(f); }
         void setRenameLabel(const juce::String& s) { label.setText(s, juce::dontSendNotification); }
         void resized() override
         {
@@ -63,6 +66,7 @@ namespace
     private:
         juce::String defaultName;
         juce::String* resultOut = nullptr;
+        std::function<void(juce::String)> onOk;
         juce::Label label;
         juce::TextEditor te;
         juce::TextButton okBtn;
@@ -172,52 +176,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     plusBtn.setImages(plusDrawable.get());
     plusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
     plusBtn.setColour(juce::DrawableButton::backgroundOnColourId, headerBar);
-    plusBtn.onClick = [this] {
-        if (!processor.outputDirectory.isDirectory())
-        {
-            settingsOverlay->syncFromProcessor();
-            settingsOverlay->setVisible(true);
-            settingsOverlay->toFront(true);
-            return;
-        }
-        refreshPackList();
-        juce::String defaultName = "New Pack " + juce::String(packDirs.size() + 1);
-        juce::File newDir = processor.outputDirectory.getChildFile(defaultName);
-        if (!newDir.createDirectory())
-            return;
-        juce::String resultName;
-        RenamePackDialogContent content(defaultName, &resultName);
-        juce::DialogWindow dw("Name sample pack", juce::Colours::white, true);
-        dw.setContentNonOwned(&content, true);
-        dw.setSize(content.getWidth(), content.getHeight());
-        dw.setResizable(false, false);
-        juce::File folderToSelect = newDir;
-        dw.enterModalState(true, juce::ModalCallbackFunction::create([this, &resultName, &folderToSelect, newDir](int result) {
-            if (result == 1 && resultName.isNotEmpty())
-            {
-                juce::File targetDir = processor.outputDirectory.getChildFile(resultName);
-                if (targetDir != newDir && !targetDir.exists() && newDir.moveFileTo(targetDir))
-                    folderToSelect = targetDir;
-            }
-            else
-            {
-                newDir.deleteRecursively();
-            }
-            refreshPackList();
-            if (folderToSelect.exists())
-            {
-                for (int i = 0; i < packDirs.size(); ++i)
-                {
-                    if (packDirs[i] == folderToSelect) { selectedPackIndex = i; break; }
-                }
-                columnPath.clear();
-                columnBrowser.setRootFolder(folderToSelect);
-                columnBrowser.setPath(columnPath);
-            }
-            updateBreadcrumb();
-            packList.repaint();
-        }));
-    };
+    plusBtn.onClick = [this] { createNewPack(); };
     addAndMakeVisible(plusBtn);
 
     packList.setModel(&packListModel);
@@ -225,7 +184,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     packList.setColour(juce::ListBox::backgroundColourId, FinderTheme::sidebarDarkBar);
     packListHoverListener = std::make_unique<PackListHoverListener>();
     packListHoverListener->editor = this;
-    addMouseListener(packListHoverListener.get(), true);
+    packList.addMouseListener(packListHoverListener.get(), true);
     packList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
     packList.setOutlineThickness(0);
     addAndMakeVisible(packList);
@@ -475,7 +434,8 @@ void SampleOrganizerEditor::resized()
     int h = getHeight();
 
     juce::Rectangle<int> logoPanel = getLogoPanelBounds();
-    plusBtn.setBounds(logoPanel.getRight() - 40, 0, 32, 32);
+    plusBtn.setBounds(logoPanel.getRight() - 40, 0, 32, 35);
+    plusBtn.toFront(true);
     juce::Rectangle<int> packListArea = getPackListBounds();
     packList.setBounds(packListArea);
     sidebarPlaceholderBtn.setVisible(false);
@@ -532,6 +492,85 @@ void SampleOrganizerEditor::refreshPackList()
     if (selectedPackIndex >= packNames.size())
         selectedPackIndex = packNames.size() > 0 ? 0 : -1;
     packList.updateContent();
+}
+
+void SampleOrganizerEditor::createNewPack()
+{
+    if (!processor.outputDirectory.isDirectory())
+    {
+        settingsOverlay->syncFromProcessor();
+        settingsOverlay->setVisible(true);
+        settingsOverlay->toFront(true);
+        return;
+    }
+    refreshPackList();
+    juce::String baseName("New Pack");
+    juce::File newDir = processor.outputDirectory.getChildFile(baseName);
+    int suffix = 0;
+    while (newDir.exists())
+        newDir = processor.outputDirectory.getChildFile(baseName + " " + juce::String(++suffix));
+    if (!newDir.createDirectory())
+    {
+        juce::NativeMessageBox::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "New Pack",
+            "Could not create the pack folder. Check permissions and that the destination path is valid.",
+            nullptr);
+        return;
+    }
+    juce::String createdPath = newDir.getFullPathName();
+    juce::File createdFile = newDir;
+    refreshPackList();
+    // Defer selection + rename to next message loop (same as ColumnBrowserComponent::showNewFolderDialog).
+    juce::MessageManager::callAsync([this, createdPath, createdFile]()
+    {
+        if (!isVisible())
+            return;
+        refreshPackList();
+        int row = -1;
+        juce::String normalCreated = createdFile.getFullPathName();
+        for (int i = 0; i < packDirs.size(); ++i)
+        {
+            if (packDirs[i].getFullPathName() == normalCreated)
+            {
+                row = i;
+                break;
+            }
+        }
+        if (row < 0)
+        {
+            juce::String createdFileName = createdFile.getFileName();
+            for (int i = 0; i < packDirs.size(); ++i)
+            {
+                if (packDirs[i].getFileName() == createdFileName)
+                {
+                    row = i;
+                    break;
+                }
+            }
+        }
+        // If FS hasn't picked up the new dir yet, add it to the list so we always have a row (same theory as new folder).
+        if (row < 0 && createdFile.exists())
+        {
+            packDirs.add(createdFile);
+            packNames.add(createdFile.getFileName());
+            packList.updateContent();
+            row = packDirs.size() - 1;
+        }
+        if (row >= 0)
+        {
+            selectedPackIndex = row;
+            columnPath.clear();
+            pathHistory.clear();
+            pathForward.clear();
+            columnBrowser.setRootFolder(packDirs[selectedPackIndex]);
+            columnBrowser.setPath(columnPath);
+            updateBreadcrumb();
+            updateForwardButtonState();
+            packList.repaint();
+            startPackInlineRename(row);
+        }
+    });
 }
 
 void SampleOrganizerEditor::updateForwardButtonState()
@@ -618,12 +657,29 @@ void SampleOrganizerEditor::PackListHoverListener::mouseExit(const juce::MouseEv
 
 void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEvent& e)
 {
-    if (!editor || !e.mods.isRightButtonDown()) return;
+    if (!editor) return;
     juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
     if (!editor->getPackListBounds().contains(posInEditor)) return;
     juce::Point<int> listPos = editor->packList.getLocalPoint(editor, posInEditor);
     int row = editor->packList.getRowContainingPosition(listPos.getX(), listPos.getY());
-    if (row < 0 || row >= editor->packDirs.size()) return;
+    // Only right-click in empty area below packs → "+ new pack" (left-click does nothing)
+    if (row < 0 || row >= editor->packDirs.size())
+    {
+        if (e.mods.isLeftButtonDown() || !e.mods.isRightButtonDown())
+            return;
+        juce::PopupMenu m;
+        m.addItem(1, "+ new pack");
+        auto opts = juce::PopupMenu::Options()
+            .withTargetComponent(&editor->packList)
+            .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
+            .withMousePosition();
+        m.showMenuAsync(opts, [editor = this->editor](int result) {
+            if (editor && result == 1)
+                editor->createNewPack();
+        });
+        return;
+    }
+    if (!e.mods.isRightButtonDown()) return;
     juce::File packDir = editor->packDirs[row];
     juce::PopupMenu m;
     m.addItem(1, "Rename");
@@ -667,7 +723,10 @@ void SampleOrganizerEditor::startPackInlineRename(int row)
     packRenameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
     packRenameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
     juce::Rectangle<int> listBounds = packList.getBounds();
-    juce::Rectangle<int> rowRect(listBounds.getX(), listBounds.getY() + row * kPackRowHeight, listBounds.getWidth(), kPackRowHeight);
+    int rowY = row * kPackRowHeight;
+    if (auto* vp = packList.getViewport())
+        rowY -= vp->getViewPosition().getY();
+    juce::Rectangle<int> rowRect(listBounds.getX(), listBounds.getY() + rowY, listBounds.getWidth(), kPackRowHeight);
     juce::Rectangle<int> textRect = rowRect.withTrimmedLeft(kPackPaddingH).withTrimmedRight(32).reduced(0, kPackPaddingV);
     packRenameEditor.setText(packNames[row], false);
     packRenameEditor.setBounds(textRect);

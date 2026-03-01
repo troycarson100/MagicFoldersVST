@@ -26,16 +26,12 @@ private:
 
     juce::Label tempoSectionLabel;
     SettingsToggleComponent autoDetectBpmToggle;
-    juce::Label manualBpmLabel;
     SettingsStepperComponent bpmStepper;
+    juce::TextEditor bpmPopupEditor;
 
-    juce::Label keySectionLabel;
     SettingsToggleComponent autoDetectKeyToggle;
-    juce::Label manualKeyLabel;
     SettingsDropdownComponent keyDropdown;
 
-    juce::Label namingSectionLabel;
-    juce::Label namingFormatLabel;
     SettingsDropdownComponent namingFormatDropdown;
     juce::Label customPrefixLabel;
     juce::TextEditor customPrefixEditor;
@@ -55,6 +51,8 @@ private:
     static juce::StringArray getKeyList();
     static juce::StringArray getNamingFormatOptions();
     void updateCustomPrefixVisibility();
+    void showBpmEditor();
+    void hideBpmEditor();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SettingsOverlayComponent)
 };

@@ -61,24 +61,27 @@ SettingsStepperComponent::SettingsStepperComponent()
 void SettingsStepperComponent::paint(juce::Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
-    g.setColour(settingsAccent);
+    bool enabled = isEnabled();
+    juce::Colour fillCol = enabled ? settingsAccent : settingsAccent.withAlpha(0.5f);
+    juce::Colour hoverCol = enabled ? settingsAccentHover : settingsAccentHover.withAlpha(0.5f);
+    g.setColour(fillCol);
     g.fillRoundedRectangle(b, b.getHeight() * 0.5f);
     g.setColour(settingsDivider);
     g.drawRoundedRectangle(b.reduced(0.5f), b.getHeight() * 0.5f, 1.0f);
     float pad = 12.0f;
     float w = b.getWidth() - pad * 2;
     float third = w / 3.0f;
-    if (hoverPart == -1)
+    if (hoverPart == -1 && enabled)
     {
-        g.setColour(settingsAccentHover);
+        g.setColour(hoverCol);
         g.fillRoundedRectangle(pad, 2, third, b.getHeight() - 4, 6.0f);
     }
-    else if (hoverPart == 1)
+    else if (hoverPart == 1 && enabled)
     {
-        g.setColour(settingsAccentHover);
+        g.setColour(hoverCol);
         g.fillRoundedRectangle(pad + third * 2, 2, third, b.getHeight() - 4, 6.0f);
     }
-    g.setColour(textOnDark);
+    g.setColour(enabled ? textOnDark : textOnDark.withAlpha(0.6f));
     g.setFont(FinderTheme::interFont(11.0f));
     g.drawText("-", minusRect.toFloat(), juce::Justification::centred);
     g.setFont(FinderTheme::interFont(18.0f, true));
@@ -98,6 +101,7 @@ void SettingsStepperComponent::resized()
 
 void SettingsStepperComponent::mouseDown(const juce::MouseEvent& e)
 {
+    if (!isEnabled()) return;
     if (minusRect.contains(e.getPosition()))
     {
         setValue(juce::jmax(minVal, value - 1));
@@ -106,6 +110,12 @@ void SettingsStepperComponent::mouseDown(const juce::MouseEvent& e)
     {
         setValue(juce::jmin(maxVal, value + 1));
     }
+}
+
+void SettingsStepperComponent::mouseDoubleClick(const juce::MouseEvent&)
+{
+    if (isEnabled() && onDoubleClick)
+        onDoubleClick();
 }
 
 void SettingsStepperComponent::mouseEnter(const juce::MouseEvent& e)

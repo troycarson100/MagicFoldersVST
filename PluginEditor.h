@@ -29,8 +29,8 @@ private:
     static constexpr int kSidebarWidth = 220;
     static constexpr int kHeaderHeight = 52;
     static constexpr int kDragAreaHeight = 72;
-    static constexpr int kDragAreaPadding = 16;       // horizontal margin around drag area
-    static constexpr int kDragAreaPaddingVertical = 10;  // 10px above and below drag samples box
+    static constexpr int kDragAreaPadding = 16;       // margin on all sides of drag area
+    static constexpr int kDragAreaPaddingVertical = 16;  // same as kDragAreaPadding for even spacing
     static constexpr int kProcessButtonHeight = 52;
     static constexpr int kThickBorderHeight = 2;     // thick horizontal borders
 
@@ -121,6 +121,7 @@ private:
         void mouseDoubleClick(const juce::MouseEvent& e) override;
     };
     std::unique_ptr<PackListHoverListener> packListHoverListener;
+    void createNewPack();
     void updateForwardButtonState();
     void pushPathToHistory();
     void goBack();
