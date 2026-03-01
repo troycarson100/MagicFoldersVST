@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "FinderTheme.h"
 #include "AssetLoader.h"
+#include "SettingsComponents.h"
 
 class SettingsOverlayComponent : public juce::Component
 {
@@ -23,27 +24,31 @@ private:
     juce::Label outputPathLabel;
     juce::TextButton browseOutputBtn;
 
-    juce::ToggleButton autoDetectBpmToggle;
+    juce::Label tempoSectionLabel;
+    SettingsToggleComponent autoDetectBpmToggle;
     juce::Label manualBpmLabel;
-    juce::TextButton bpmDownBtn;
-    juce::Label bpmValueLabel;
-    juce::TextButton bpmUpBtn;
+    SettingsStepperComponent bpmStepper;
 
-    juce::ToggleButton autoDetectKeyToggle;
+    juce::Label keySectionLabel;
+    SettingsToggleComponent autoDetectKeyToggle;
     juce::Label manualKeyLabel;
-    juce::ComboBox keySelector;
+    SettingsDropdownComponent keyDropdown;
 
+    juce::Label namingSectionLabel;
     juce::Label namingFormatLabel;
-    juce::ComboBox namingFormatCombo;
+    SettingsDropdownComponent namingFormatDropdown;
     juce::Label customPrefixLabel;
     juce::TextEditor customPrefixEditor;
 
-    juce::ToggleButton overwriteDuplicatesToggle;
+    juce::Label behaviorSectionLabel;
+    SettingsToggleComponent overwriteDuplicatesToggle;
 
     juce::Viewport scrollViewport;
     struct ContentArea : juce::Component
     {
-        void paint(juce::Graphics& g) override { g.fillAll(FinderTheme::creamBg); }
+        void paint(juce::Graphics& g) override;
+        void setSectionRects(const juce::Array<juce::Rectangle<int>>& rects) { sectionRects = rects; }
+        juce::Array<juce::Rectangle<int>> sectionRects;
     };
     ContentArea content;
 

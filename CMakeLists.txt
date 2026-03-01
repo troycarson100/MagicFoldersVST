@@ -48,6 +48,7 @@ target_sources(SampleOrganizer PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp
     SettingsOverlayComponent.cpp
+    SettingsComponents.cpp
     ColumnBrowserComponent.cpp
 )
 

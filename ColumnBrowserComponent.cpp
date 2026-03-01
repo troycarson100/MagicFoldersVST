@@ -443,11 +443,14 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         juce::File f = items.getReference(row);
         juce::PopupMenu m;
         m.addItem(1, "Rename");
-        juce::String revealLabel = juce::SystemStats::getOperatingSystemType() == juce::SystemStats::MacOSX
-            ? "Reveal in Finder" : "Reveal in File Explorer";
+        bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
+        juce::String revealLabel = isMac ? "Reveal in Finder" : "Reveal in File Explorer";
         m.addItem(2, revealLabel);
-        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withParentComponent(getTopLevelComponent()),
-            [this, col, row, f](int result) {
+        auto opts = juce::PopupMenu::Options()
+            .withParentComponent(getTopLevelComponent())
+            .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
+            .withMousePosition();
+        m.showMenuAsync(opts, [this, col, row, f](int result) {
                 if (result == 1)
                     startInlineRename(col, row);
                 else if (result == 2 && f.exists())

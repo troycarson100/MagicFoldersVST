@@ -225,7 +225,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     packList.setColour(juce::ListBox::backgroundColourId, FinderTheme::sidebarDarkBar);
     packListHoverListener = std::make_unique<PackListHoverListener>();
     packListHoverListener->editor = this;
-    packList.addMouseListener(packListHoverListener.get(), true);
+    addMouseListener(packListHoverListener.get(), true);
     packList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
     packList.setOutlineThickness(0);
     addAndMakeVisible(packList);
@@ -374,7 +374,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
 SampleOrganizerEditor::~SampleOrganizerEditor()
 {
     if (packListHoverListener)
-        packList.removeMouseListener(packListHoverListener.get());
+        removeMouseListener(packListHoverListener.get());
     transportSource.setSource(nullptr);
     readerSource.reset();
     sourcePlayer.setSource(nullptr);
@@ -601,22 +601,54 @@ void SampleOrganizerEditor::goForward()
 
 void SampleOrganizerEditor::PackListHoverListener::mouseMove(const juce::MouseEvent& e)
 {
-    if (!editor || e.eventComponent != &editor->packList) return;
-    int row = e.getPosition().getY() / SampleOrganizerEditor::kPackRowHeight;
+    if (!editor) return;
+    juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
+    if (!editor->getPackListBounds().contains(posInEditor)) { editor->setHoveredPackRow(-1); return; }
+    juce::Point<int> listPos = editor->packList.getLocalPoint(editor, posInEditor);
+    int row = editor->packList.getRowContainingPosition(listPos.getX(), listPos.getY());
     int total = editor->packNames.size();
     editor->setHoveredPackRow(row >= 0 && row < total ? row : -1);
 }
 
 void SampleOrganizerEditor::PackListHoverListener::mouseExit(const juce::MouseEvent& e)
 {
-    if (editor && e.eventComponent == &editor->packList)
+    if (editor)
         editor->setHoveredPackRow(-1);
+}
+
+void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEvent& e)
+{
+    if (!editor || !e.mods.isRightButtonDown()) return;
+    juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
+    if (!editor->getPackListBounds().contains(posInEditor)) return;
+    juce::Point<int> listPos = editor->packList.getLocalPoint(editor, posInEditor);
+    int row = editor->packList.getRowContainingPosition(listPos.getX(), listPos.getY());
+    if (row < 0 || row >= editor->packDirs.size()) return;
+    juce::File packDir = editor->packDirs[row];
+    juce::PopupMenu m;
+    m.addItem(1, "Rename");
+    bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
+    m.addItem(2, isMac ? "Reveal in Finder" : "Reveal in File Explorer");
+    auto opts = juce::PopupMenu::Options()
+        .withParentComponent(editor->getTopLevelComponent())
+        .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
+        .withMousePosition();
+    m.showMenuAsync(opts, [editor = this->editor, row, packDir](int result) {
+        if (!editor) return;
+        if (result == 1)
+            editor->startPackInlineRename(row);
+        else if (result == 2 && packDir.exists())
+            packDir.revealToUser();
+    });
 }
 
 void SampleOrganizerEditor::PackListHoverListener::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (!editor || e.eventComponent != &editor->packList) return;
-    int row = editor->packList.getRowContainingPosition(e.getPosition().getX(), e.getPosition().getY());
+    if (!editor) return;
+    juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
+    if (!editor->getPackListBounds().contains(posInEditor)) return;
+    juce::Point<int> listPos = editor->packList.getLocalPoint(editor, posInEditor);
+    int row = editor->packList.getRowContainingPosition(listPos.getX(), listPos.getY());
     if (row >= 0)
         editor->tryRenamePack(row);
 }

@@ -5,9 +5,23 @@ using namespace FinderTheme;
 namespace
 {
     constexpr int kHeaderHeight = 52;
+    constexpr int kContentPad = 32;
+    constexpr int kSectionGap = 24;
     constexpr int kRowHeight = 28;
-    constexpr int kSectionGap = 20;
-    constexpr int kContentPad = 28;
+    constexpr int kCardRadius = 8;
+}
+
+void SettingsOverlayComponent::ContentArea::paint(juce::Graphics& g)
+{
+    g.fillAll(creamBg);
+    for (const auto& r : sectionRects)
+    {
+        auto fr = r.toFloat().reduced(1.0f);
+        g.setColour(settingsCardBg);
+        g.fillRoundedRectangle(fr, (float)kCardRadius);
+        g.setColour(settingsDivider);
+        g.drawRoundedRectangle(fr, (float)kCardRadius, 1.0f);
+    }
 }
 
 juce::StringArray SettingsOverlayComponent::getKeyList()
@@ -25,7 +39,7 @@ juce::StringArray SettingsOverlayComponent::getNamingFormatOptions()
 
 void SettingsOverlayComponent::updateCustomPrefixVisibility()
 {
-    bool show = (namingFormatCombo.getSelectedItemIndex() == 2);
+    bool show = (namingFormatDropdown.getSelectedIndex() == 2);
     customPrefixLabel.setVisible(show);
     customPrefixEditor.setVisible(show);
 }
@@ -57,15 +71,16 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     closeBtn.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible(closeBtn);
 
-    outputFolderTitleLabel.setText("Output Folder", juce::dontSendNotification);
+    outputFolderTitleLabel.setText("Output", juce::dontSendNotification);
     outputFolderTitleLabel.setColour(juce::Label::textColourId, textCharcoal);
-    outputFolderTitleLabel.setFont(FinderTheme::interFont(13.0f, true));
+    outputFolderTitleLabel.setFont(FinderTheme::interFont(14.0f, true));
     addAndMakeVisible(outputFolderTitleLabel);
     outputPathLabel.setColour(juce::Label::textColourId, textCharcoal);
+    outputPathLabel.setFont(FinderTheme::interFont(12.0f));
     outputPathLabel.setText("(not set)", juce::dontSendNotification);
     addAndMakeVisible(outputPathLabel);
     browseOutputBtn.setButtonText("Browse");
-    browseOutputBtn.setColour(juce::TextButton::buttonColourId, processBtnBg);
+    browseOutputBtn.setColour(juce::TextButton::buttonColourId, settingsAccent);
     browseOutputBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
     browseOutputBtn.onClick = [this] {
         auto chooser = std::make_shared<juce::FileChooser>("Magic Folders root directory",
@@ -83,79 +98,69 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     };
     addAndMakeVisible(browseOutputBtn);
 
+    tempoSectionLabel.setText("Tempo", juce::dontSendNotification);
+    tempoSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
+    tempoSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
+    addAndMakeVisible(tempoSectionLabel);
     autoDetectBpmToggle.setButtonText("Auto-detect BPM");
-    autoDetectBpmToggle.setColour(juce::ToggleButton::tickColourId, textCharcoal);
-    autoDetectBpmToggle.setColour(juce::ToggleButton::textColourId, textCharcoal);
     autoDetectBpmToggle.onClick = [this] { processor.useHostBpm = !autoDetectBpmToggle.getToggleState(); };
     addAndMakeVisible(autoDetectBpmToggle);
-
     manualBpmLabel.setText("Manual BPM (60–200)", juce::dontSendNotification);
     manualBpmLabel.setColour(juce::Label::textColourId, textCharcoal);
+    manualBpmLabel.setFont(FinderTheme::interFont(12.0f));
     addAndMakeVisible(manualBpmLabel);
-    bpmDownBtn.setButtonText("-");
-    bpmDownBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    bpmDownBtn.setColour(juce::TextButton::textColourOffId, textCharcoal);
-    bpmDownBtn.onClick = [this] {
-        processor.projectBPM = juce::jmax(60, processor.projectBPM - 1);
-        bpmValueLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification);
+    bpmStepper.setRange(60, 200);
+    bpmStepper.onValueChange = [this](int v) {
+        processor.projectBPM = v;
     };
-    bpmUpBtn.setButtonText("+");
-    bpmUpBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    bpmUpBtn.setColour(juce::TextButton::textColourOffId, textCharcoal);
-    bpmUpBtn.onClick = [this] {
-        processor.projectBPM = juce::jmin(200, processor.projectBPM + 1);
-        bpmValueLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification);
-    };
-    bpmValueLabel.setColour(juce::Label::textColourId, textCharcoal);
-    addAndMakeVisible(bpmDownBtn);
-    addAndMakeVisible(bpmValueLabel);
-    addAndMakeVisible(bpmUpBtn);
+    addAndMakeVisible(bpmStepper);
 
+    keySectionLabel.setText("Key Detection", juce::dontSendNotification);
+    keySectionLabel.setColour(juce::Label::textColourId, textCharcoal);
+    keySectionLabel.setFont(FinderTheme::interFont(14.0f, true));
+    addAndMakeVisible(keySectionLabel);
     autoDetectKeyToggle.setButtonText("Auto-detect Key");
-    autoDetectKeyToggle.setColour(juce::ToggleButton::tickColourId, textCharcoal);
-    autoDetectKeyToggle.setColour(juce::ToggleButton::textColourId, textCharcoal);
     autoDetectKeyToggle.onClick = [this] { processor.useProjectKey = !autoDetectKeyToggle.getToggleState(); };
     addAndMakeVisible(autoDetectKeyToggle);
-
     manualKeyLabel.setText("Manual Key", juce::dontSendNotification);
     manualKeyLabel.setColour(juce::Label::textColourId, textCharcoal);
+    manualKeyLabel.setFont(FinderTheme::interFont(12.0f));
     addAndMakeVisible(manualKeyLabel);
-    keySelector.addItemList(getKeyList(), 1);
-    keySelector.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xffE0DDD6));
-    keySelector.setColour(juce::ComboBox::textColourId, textCharcoal);
-    keySelector.setColour(juce::ComboBox::outlineColourId, topBar);
-    keySelector.setColour(juce::ComboBox::buttonColourId, juce::Colour(0xff393E46));
-    keySelector.setColour(juce::ComboBox::arrowColourId, textOnDark);
-    keySelector.onChange = [this] { processor.projectKey = keySelector.getText(); };
-    addAndMakeVisible(keySelector);
+    keyDropdown.setOptions(getKeyList());
+    keyDropdown.onChange = [this](int idx) {
+        processor.projectKey = getKeyList()[idx];
+    };
+    addAndMakeVisible(keyDropdown);
 
+    namingSectionLabel.setText("Naming", juce::dontSendNotification);
+    namingSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
+    namingSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
+    addAndMakeVisible(namingSectionLabel);
     namingFormatLabel.setText("Naming Format", juce::dontSendNotification);
     namingFormatLabel.setColour(juce::Label::textColourId, textCharcoal);
+    namingFormatLabel.setFont(FinderTheme::interFont(12.0f));
     addAndMakeVisible(namingFormatLabel);
-    namingFormatCombo.addItemList(getNamingFormatOptions(), 1);
-    namingFormatCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xffE0DDD6));
-    namingFormatCombo.setColour(juce::ComboBox::textColourId, textCharcoal);
-    namingFormatCombo.setColour(juce::ComboBox::outlineColourId, topBar);
-    namingFormatCombo.setColour(juce::ComboBox::buttonColourId, juce::Colour(0xff393E46));
-    namingFormatCombo.setColour(juce::ComboBox::arrowColourId, textOnDark);
-    namingFormatCombo.onChange = [this] {
-        processor.namingFormat = namingFormatCombo.getSelectedItemIndex();
+    namingFormatDropdown.setOptions(getNamingFormatOptions());
+    namingFormatDropdown.onChange = [this](int idx) {
+        processor.namingFormat = idx;
         updateCustomPrefixVisibility();
     };
-    addAndMakeVisible(namingFormatCombo);
-
+    addAndMakeVisible(namingFormatDropdown);
     customPrefixLabel.setText("Custom Prefix", juce::dontSendNotification);
     customPrefixLabel.setColour(juce::Label::textColourId, textCharcoal);
+    customPrefixLabel.setFont(FinderTheme::interFont(12.0f));
     addAndMakeVisible(customPrefixLabel);
-    customPrefixEditor.setColour(juce::TextEditor::backgroundColourId, creamBg);
-    customPrefixEditor.setColour(juce::TextEditor::textColourId, textCharcoal);
-    customPrefixEditor.setColour(juce::TextEditor::outlineColourId, topBar);
+    customPrefixEditor.setColour(juce::TextEditor::backgroundColourId, settingsAccent);
+    customPrefixEditor.setColour(juce::TextEditor::textColourId, textOnDark);
+    customPrefixEditor.setColour(juce::TextEditor::outlineColourId, settingsDivider);
     customPrefixEditor.onTextChange = [this] { processor.customPrefix = customPrefixEditor.getText(); };
     addAndMakeVisible(customPrefixEditor);
 
+    behaviorSectionLabel.setText("Behavior", juce::dontSendNotification);
+    behaviorSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
+    behaviorSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
+    addAndMakeVisible(behaviorSectionLabel);
     overwriteDuplicatesToggle.setButtonText("Overwrite Duplicates");
-    overwriteDuplicatesToggle.setColour(juce::ToggleButton::tickColourId, textCharcoal);
-    overwriteDuplicatesToggle.setColour(juce::ToggleButton::textColourId, textCharcoal);
     overwriteDuplicatesToggle.onClick = [this] { processor.overwriteDuplicates = overwriteDuplicatesToggle.getToggleState(); };
     addAndMakeVisible(overwriteDuplicatesToggle);
 
@@ -166,18 +171,20 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     content.addAndMakeVisible(outputFolderTitleLabel);
     content.addAndMakeVisible(outputPathLabel);
     content.addAndMakeVisible(browseOutputBtn);
+    content.addAndMakeVisible(tempoSectionLabel);
     content.addAndMakeVisible(autoDetectBpmToggle);
     content.addAndMakeVisible(manualBpmLabel);
-    content.addAndMakeVisible(bpmDownBtn);
-    content.addAndMakeVisible(bpmValueLabel);
-    content.addAndMakeVisible(bpmUpBtn);
+    content.addAndMakeVisible(bpmStepper);
+    content.addAndMakeVisible(keySectionLabel);
     content.addAndMakeVisible(autoDetectKeyToggle);
     content.addAndMakeVisible(manualKeyLabel);
-    content.addAndMakeVisible(keySelector);
+    content.addAndMakeVisible(keyDropdown);
+    content.addAndMakeVisible(namingSectionLabel);
     content.addAndMakeVisible(namingFormatLabel);
-    content.addAndMakeVisible(namingFormatCombo);
+    content.addAndMakeVisible(namingFormatDropdown);
     content.addAndMakeVisible(customPrefixLabel);
     content.addAndMakeVisible(customPrefixEditor);
+    content.addAndMakeVisible(behaviorSectionLabel);
     content.addAndMakeVisible(overwriteDuplicatesToggle);
 
     syncFromProcessor();
@@ -187,11 +194,11 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
 void SettingsOverlayComponent::syncFromProcessor()
 {
     autoDetectBpmToggle.setToggleState(!processor.useHostBpm, juce::dontSendNotification);
-    bpmValueLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification);
+    bpmStepper.setValue(processor.projectBPM);
     autoDetectKeyToggle.setToggleState(!processor.useProjectKey, juce::dontSendNotification);
     int keyIndex = getKeyList().indexOf(processor.projectKey);
-    keySelector.setSelectedItemIndex(keyIndex >= 0 ? keyIndex : 0, juce::dontSendNotification);
-    namingFormatCombo.setSelectedItemIndex(juce::jlimit(0, 2, processor.namingFormat), juce::dontSendNotification);
+    keyDropdown.setSelectedIndex(keyIndex >= 0 ? keyIndex : 0, juce::dontSendNotification);
+    namingFormatDropdown.setSelectedIndex(juce::jlimit(0, 2, processor.namingFormat), juce::dontSendNotification);
     customPrefixEditor.setText(processor.customPrefix, juce::dontSendNotification);
     overwriteDuplicatesToggle.setToggleState(processor.overwriteDuplicates, juce::dontSendNotification);
     if (processor.outputDirectory.isDirectory()) {
@@ -208,8 +215,10 @@ void SettingsOverlayComponent::paint(juce::Graphics& g)
 {
     g.fillAll(creamBg);
     juce::Rectangle<int> headerBarRect(0, 0, getWidth(), kHeaderHeight);
-    g.setColour(FinderTheme::topBar);
+    g.setColour(settingsAccent);
     g.fillRect(headerBarRect);
+    g.setColour(settingsDivider);
+    g.fillRect(0, kHeaderHeight - 1, getWidth(), 1);
     g.setColour(textOnDark);
     g.setFont(FinderTheme::interFont(15.0f, true));
     g.drawText("Settings", 20, 0, getWidth() - 80, kHeaderHeight, juce::Justification::centredLeft, true);
@@ -219,44 +228,73 @@ void SettingsOverlayComponent::resized()
 {
     closeBtn.setBounds(getWidth() - 44, (kHeaderHeight - 28) / 2, 28, 28);
 
-    const int labelW = 180;
-    const int controlW = 260;
+    const int labelW = 160;
+    const int controlW = 280;
     const int cw = juce::jmax(getWidth(), labelW + controlW + kContentPad * 2 + 40);
     int y = kContentPad;
+    juce::Array<juce::Rectangle<int>> sectionRects;
 
     scrollViewport.setBounds(0, kHeaderHeight, getWidth(), getHeight() - kHeaderHeight);
-    content.setSize(cw, 580);
+    content.setSize(cw, 620);
 
-    outputFolderTitleLabel.setBounds(kContentPad, y, labelW + controlW, kRowHeight);
-    y += kRowHeight + 6;
-    outputPathLabel.setBounds(kContentPad, y, cw - kContentPad * 2 - 94, kRowHeight);
-    browseOutputBtn.setBounds(cw - kContentPad - 84, y, 80, 26);
-    y += kRowHeight + 6 + kSectionGap;
+    // Output section
+    int sectionTop = y;
+    outputFolderTitleLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    outputPathLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 100, kRowHeight);
+    browseOutputBtn.setBounds(cw - kContentPad - 92, y - 2, 84, 28);
+    y += kRowHeight + 12;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+    y += kSectionGap;
 
-    autoDetectBpmToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
-    y += kRowHeight + 6;
-    manualBpmLabel.setBounds(kContentPad, y, labelW, kRowHeight);
-    y += kRowHeight + 6;
-    bpmDownBtn.setBounds(kContentPad, y, 36, 26);
-    bpmValueLabel.setBounds(kContentPad + 40, y, 48, 26);
-    bpmUpBtn.setBounds(kContentPad + 92, y, 36, 26);
-    y += kRowHeight + 6 + kSectionGap;
+    // Tempo section
+    sectionTop = y;
+    tempoSectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    autoDetectBpmToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
+    y += 38;
+    manualBpmLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
+    y += kRowHeight + 4;
+    bpmStepper.setBounds(kContentPad + 12, y, 180, 36);
+    y += 44;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+    y += kSectionGap;
 
-    autoDetectKeyToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
-    y += kRowHeight + 6;
-    manualKeyLabel.setBounds(kContentPad, y, labelW, kRowHeight);
-    y += kRowHeight + 6;
-    keySelector.setBounds(kContentPad, y, controlW, 26);
-    y += kRowHeight + 6 + kSectionGap;
+    // Key Detection section
+    sectionTop = y;
+    keySectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    autoDetectKeyToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
+    y += 38;
+    manualKeyLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
+    y += kRowHeight + 4;
+    keyDropdown.setBounds(kContentPad + 12, y, controlW, 32);
+    y += 40;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+    y += kSectionGap;
 
-    namingFormatLabel.setBounds(kContentPad, y, labelW, kRowHeight);
-    y += kRowHeight + 6;
-    namingFormatCombo.setBounds(kContentPad, y, controlW, 26);
-    y += kRowHeight + 6;
-    customPrefixLabel.setBounds(kContentPad, y, labelW, kRowHeight);
-    y += kRowHeight + 6;
-    customPrefixEditor.setBounds(kContentPad, y, controlW, 26);
-    y += kRowHeight + 6 + kSectionGap;
+    // Naming section
+    sectionTop = y;
+    namingSectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    namingFormatLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
+    y += kRowHeight + 4;
+    namingFormatDropdown.setBounds(kContentPad + 12, y, controlW, 32);
+    y += 36;
+    customPrefixLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
+    y += kRowHeight + 4;
+    customPrefixEditor.setBounds(kContentPad + 12, y, controlW, 32);
+    y += 40;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+    y += kSectionGap;
 
-    overwriteDuplicatesToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
+    // Behavior section
+    sectionTop = y;
+    behaviorSectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    overwriteDuplicatesToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
+    y += 44;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+
+    content.setSectionRects(sectionRects);
 }

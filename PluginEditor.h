@@ -117,6 +117,7 @@ private:
         SampleOrganizerEditor* editor = nullptr;
         void mouseMove(const juce::MouseEvent& e) override;
         void mouseExit(const juce::MouseEvent& e) override;
+        void mouseDown(const juce::MouseEvent& e) override;
         void mouseDoubleClick(const juce::MouseEvent& e) override;
     };
     std::unique_ptr<PackListHoverListener> packListHoverListener;

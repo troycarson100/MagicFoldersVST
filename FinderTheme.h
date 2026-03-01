@@ -41,4 +41,10 @@ namespace FinderTheme
     const juce::Colour textDim           { textCharcoal.withAlpha(0.6f) };
     const juce::Colour hover             { juce::Colour(0x08000000) };
     const juce::Colour danger            { 0xffff5f56 };
+
+    // Settings panel (match main page, no OS defaults)
+    const juce::Colour settingsAccent    { 0xff2F3A4A };  // deep muted blue
+    const juce::Colour settingsCardBg    { 0xffE8E4DE };  // slightly darker beige
+    const juce::Colour settingsDivider   { 0xffC8C4BE };  // soft 1px divider
+    const juce::Colour settingsAccentHover { 0xff3A4658 };
 }
