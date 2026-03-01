@@ -52,10 +52,10 @@ juce_add_binary_data(SampleOrganizerAssets SOURCES assets/*.svg)
 
 - **SampleOrganizerProcessor** is a `juce::AudioProcessor`. It does **not** process audio in `processBlock`; it exists to host the editor and to own:
   - **Queue:** `juce::Array<SampleInfo> queue` — files the user has dropped.
-  - **Settings:** `outputDirectory`, `projectBPM`, `projectKey`, `useHostBpm`, `useProjectKey`, `namingFormat`, `customPrefix`, `overwriteDuplicates`, `themeLight`.
+  - **Settings:** `outputDirectory`, `batchPlusFolder` (folder for Batch +, e.g. Ableton project/Recordings), `projectBPM`, `projectKey`, `useHostBpm`, `useProjectKey`, `namingFormat`, `customPrefix`, `overwriteDuplicates`, `themeLight`. `outputDirectory` and `batchPlusFolder` are persisted in `getStateInformation`/`setStateInformation`.
   - **Processing:** `processAll()` runs Essentia analysis on each queued file and `copyToFolder()` writes to disk.
 - **SampleOrganizerEditor** holds a reference to the processor, builds the UI, and:
-  - Adds files to `processor.queue` when the user drops them on the drag zone.
+  - Adds files to `processor.queue` when the user drops them on the drag zone or clicks Batch + and selects a folder (`addFilesFromFolderRecursive`).
   - Sets `processor.currentProcessDirectory` from the column browser’s selected folder before calling `processAll()`.
   - Reads/writes processor settings in the settings overlay.
 
@@ -200,7 +200,7 @@ The editor is one window with fixed layout constants and a full-height dark left
 static constexpr int kLogoPanelWidth = 220;
 static constexpr int kSidebarWidth = 220;
 static constexpr int kHeaderHeight = 52;
-static constexpr int kDragAreaHeight = 100;
+static constexpr int kDragAreaHeight = 108;
 static constexpr int kProcessButtonHeight = 52;
 // Pack list row
 static constexpr int kPackRowHeight = 34;
@@ -318,6 +318,8 @@ else
 ## 8. Drag zone and Process Samples
 
 - **Drag:** Editor implements `FileDragAndDropTarget`. `isInterestedInFileDrag` / `filesDropped` use `expandDroppedPaths()` and `isAudioPath()`; then `processor.addFiles(fileArray)`. Drag-over state toggles `isDragOver` and redraws the zone (solid border, slightly darker).
+- **Batch + button:** Top-right of the drag area (asset `Batch_Plus.svg`). Clears the queue then adds all WAV/AIFF from the Batch+ folder (so clicking twice doesn’t duplicate). Uses the folder set in Settings → "Set Batch + Folder", or **auto-detected** only when the user clicks Batch+ (not on load): `tryAutoDetectAbletonSamplesFolder()` searches only **Documents** for `.als` files, finds each project’s `Samples` or `Recorded` folder, picks the most recently modified, then scans and adds. Music folder is not searched (to avoid Apple Music permission and host freeze on load). If still not set after auto-detect, Settings is suggested.
+- **Queue list:** Click to select one item; Shift+click to add/remove from selection. Backspace or Delete removes selected item(s); focus the queue list first (click it) so keys are received. Selection is drawn with `sidebarRowSelected`; `removeSelectedQueueItems()` calls `processor.removeQueueItemsAt(selectedQueueIndices)`.
 - **Process button:** On click, sets `processor.currentProcessDirectory = columnBrowser.getSelectedFolder()` (or `outputDirectory`), then `juce::Timer::callAfterDelay(50, [this]{ processor.processAll(); ... })`. Success/error message is shown in the breadcrumb label.
 
 ---
@@ -326,6 +328,7 @@ else
 
 - **SettingsOverlayComponent** gets `SampleOrganizerProcessor&`. It shows:
   - Output folder (path label + Browse button)
+  - Set Batch + Folder (path label + Browse button) — folder used by Batch + to add all audio; required for Batch + to work (standalone and host)
   - Auto-detect BPM toggle (maps to `!processor.useHostBpm`)
   - Manual BPM 60–200 (+/-)
   - Auto-detect Key toggle (maps to `!processor.useProjectKey`)

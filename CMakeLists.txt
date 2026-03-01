@@ -34,6 +34,7 @@ target_include_directories(SampleOrganizer PRIVATE
 
 juce_add_binary_data(SampleOrganizerAssets
     SOURCES
+        assets/Batch_Plus.svg
         assets/DarkGreyArrowRight.svg
         assets/FolderDarkGrey_Icon.svg
         assets/GearSettingsIcon.png

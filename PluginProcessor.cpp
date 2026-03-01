@@ -30,13 +30,57 @@ void SampleOrganizerProcessor::setOutputDirectory(const juce::File& dir)
     outputDirectory = dir;
 }
 
+void SampleOrganizerProcessor::setBatchPlusFolder(const juce::File& dir)
+{
+    batchPlusFolder = dir;
+}
+
+void SampleOrganizerProcessor::tryAutoDetectAbletonSamplesFolder()
+{
+    if (batchPlusFolder.isDirectory())
+        return;
+    // Only search Documents to avoid triggering Apple Music permission (userMusicDirectory)
+    // and to avoid blocking on a huge Music library. User can set Music-based projects in Settings.
+    juce::File docsDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    if (!docsDir.isDirectory())
+        return;
+    juce::File bestSamples;
+    int64 bestTime = 0;
+    const int maxAls = 30;
+    juce::Array<juce::File> alsFiles;
+    docsDir.findChildFiles(alsFiles, juce::File::findFiles, true, "*.als");
+    int alsCount = 0;
+    for (const juce::File& als : alsFiles)
+        {
+            if (alsCount++ >= maxAls)
+                break;
+            juce::File projectDir = als.getParentDirectory();
+            for (const juce::String& subName : { "Samples", "Recorded" })
+            {
+                juce::File candidate = projectDir.getChildFile(subName);
+                if (candidate.isDirectory())
+                {
+                    int64 modTime = candidate.getLastModificationTime().toMilliseconds();
+                    if (modTime > bestTime)
+                    {
+                        bestTime = modTime;
+                        bestSamples = candidate;
+                    }
+                    break;
+                }
+            }
+        if (alsCount >= maxAls)
+            break;
+    }
+    if (bestSamples.isDirectory())
+        batchPlusFolder = bestSamples;
+}
+
 void SampleOrganizerProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::MemoryOutputStream os(destData, true);
-    if (outputDirectory.isDirectory() || outputDirectory.exists())
-        os.writeString(outputDirectory.getFullPathName());
-    else
-        os.writeString({});
+    os.writeString(outputDirectory.getFullPathName());
+    os.writeString(batchPlusFolder.getFullPathName());
 }
 
 void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -50,6 +94,16 @@ void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInB
         juce::File dir(path);
         if (dir.exists())
             outputDirectory = dir;
+    }
+    if (is.getNumBytesRemaining() > 0)
+    {
+        path = is.readString();
+        if (path.isNotEmpty())
+        {
+            juce::File dir(path);
+            if (dir.isDirectory())
+                batchPlusFolder = dir;
+        }
     }
 }
 
@@ -85,6 +139,22 @@ void SampleOrganizerProcessor::addFilesFromFolder(const juce::File& directory)
         return;
     juce::Array<juce::File> files;
     directory.findChildFiles(files, juce::File::findFiles, false);
+    juce::Array<juce::File> audioFiles;
+    for (auto& f : files)
+    {
+        juce::String ext = f.getFileExtension().toLowerCase().trimCharactersAtStart(".");
+        if (ext == "wav" || ext == "aif" || ext == "aiff")
+            audioFiles.add(f);
+    }
+    addFiles(audioFiles);
+}
+
+void SampleOrganizerProcessor::addFilesFromFolderRecursive(const juce::File& directory)
+{
+    if (!directory.isDirectory())
+        return;
+    juce::Array<juce::File> files;
+    directory.findChildFiles(files, juce::File::findFiles, true);
     juce::Array<juce::File> audioFiles;
     for (auto& f : files)
     {
@@ -152,12 +222,11 @@ void SampleOrganizerProcessor::processAll()
 bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
 {
     juce::File baseDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
-    juce::File folder = baseDir.getChildFile(info.category);
-    juce::String typeName = (info.type == "Loop") ? "Loops" : "One-Shots";
-    // Don't add a type subfolder with the same name (avoids Loops/Loops, One-Shots/One-Shots)
-    if (folder.getFileName() != typeName)
-        folder = folder.getChildFile(typeName);
-
+    // Default structure: Pack Name / Loop | One-Shot / Category (instruments) / files
+    juce::String typeFolderName = (info.type == "Loop") ? "Loop" : "One-Shot";
+    juce::File typeFolder = baseDir.getChildFile(typeFolderName);
+    typeFolder.createDirectory();
+    juce::File folder = typeFolder.getChildFile(info.category);
     folder.createDirectory();
 
     juce::String ext = info.sourceFile.getFileExtension().trimCharactersAtStart(".").toLowerCase();
@@ -479,6 +548,20 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
 void SampleOrganizerProcessor::clearQueue()
 {
     queue.clear();
+}
+
+void SampleOrganizerProcessor::removeQueueItemsAt(const juce::Array<int>& indices)
+{
+    if (indices.isEmpty() || queue.isEmpty())
+        return;
+    juce::Array<int> sorted(indices);
+    sorted.sort();
+    for (int i = sorted.size() - 1; i >= 0; --i)
+    {
+        int idx = sorted.getUnchecked(i);
+        if (idx >= 0 && idx < queue.size())
+            queue.remove(idx);
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

@@ -9,6 +9,10 @@ struct AssetLoader
     {
         return juce::Drawable::createFromImageData(BinaryData::MagicFolders_Logo_White_svg, BinaryData::MagicFolders_Logo_White_svgSize);
     }
+    static std::unique_ptr<juce::Drawable> getBatchPlusIcon()
+    {
+        return juce::Drawable::createFromImageData(BinaryData::Batch_Plus_svg, BinaryData::Batch_Plus_svgSize);
+    }
     static std::unique_ptr<juce::Drawable> getPlusIcon()
     {
         return juce::Drawable::createFromImageData(BinaryData::Plus_Icon_svg, BinaryData::Plus_Icon_svgSize);

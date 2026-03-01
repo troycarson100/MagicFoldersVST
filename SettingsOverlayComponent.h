@@ -24,6 +24,10 @@ private:
     juce::Label outputPathLabel;
     juce::TextButton browseOutputBtn;
 
+    juce::Label batchPlusFolderTitleLabel;
+    juce::Label batchPlusPathLabel;
+    juce::TextButton browseBatchPlusBtn;
+
     juce::Label tempoSectionLabel;
     SettingsToggleComponent autoDetectBpmToggle;
     SettingsStepperComponent bpmStepper;

@@ -98,6 +98,33 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     };
     addAndMakeVisible(browseOutputBtn);
 
+    batchPlusFolderTitleLabel.setText("Set Batch + Folder", juce::dontSendNotification);
+    batchPlusFolderTitleLabel.setColour(juce::Label::textColourId, textCharcoal);
+    batchPlusFolderTitleLabel.setFont(FinderTheme::interFont(14.0f, true));
+    addAndMakeVisible(batchPlusFolderTitleLabel);
+    batchPlusPathLabel.setColour(juce::Label::textColourId, textCharcoal);
+    batchPlusPathLabel.setFont(FinderTheme::interFont(12.0f));
+    batchPlusPathLabel.setText("(not set)", juce::dontSendNotification);
+    addAndMakeVisible(batchPlusPathLabel);
+    browseBatchPlusBtn.setButtonText("Browse");
+    browseBatchPlusBtn.setColour(juce::TextButton::buttonColourId, settingsAccent);
+    browseBatchPlusBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
+    browseBatchPlusBtn.onClick = [this] {
+        auto chooser = std::make_shared<juce::FileChooser>("Folder for Batch + (e.g. Ableton project or Recordings)",
+            processor.batchPlusFolder.isDirectory() ? processor.batchPlusFolder : juce::File(), juce::String());
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [this, chooser](const juce::FileChooser& fc) {
+                auto r = fc.getResult();
+                if (r != juce::File()) {
+                    processor.setBatchPlusFolder(r);
+                    juce::String p = r.getFullPathName();
+                    if (p.length() > 60) p = p.dropLastCharacters(p.length() - 57) + "...";
+                    batchPlusPathLabel.setText(p, juce::dontSendNotification);
+                }
+            });
+    };
+    addAndMakeVisible(browseBatchPlusBtn);
+
     tempoSectionLabel.setText("Tempo", juce::dontSendNotification);
     tempoSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
     tempoSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
@@ -162,6 +189,9 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     content.addAndMakeVisible(outputFolderTitleLabel);
     content.addAndMakeVisible(outputPathLabel);
     content.addAndMakeVisible(browseOutputBtn);
+    content.addAndMakeVisible(batchPlusFolderTitleLabel);
+    content.addAndMakeVisible(batchPlusPathLabel);
+    content.addAndMakeVisible(browseBatchPlusBtn);
     content.addAndMakeVisible(tempoSectionLabel);
     content.addAndMakeVisible(autoDetectBpmToggle);
     content.addAndMakeVisible(bpmStepper);
@@ -195,6 +225,13 @@ void SettingsOverlayComponent::syncFromProcessor()
     } else {
         outputPathLabel.setText("(not set)", juce::dontSendNotification);
     }
+    if (processor.batchPlusFolder.isDirectory()) {
+        juce::String p = processor.batchPlusFolder.getFullPathName();
+        if (p.length() > 60) p = p.dropLastCharacters(p.length() - 57) + "...";
+        batchPlusPathLabel.setText(p, juce::dontSendNotification);
+    } else {
+        batchPlusPathLabel.setText("(not set)", juce::dontSendNotification);
+    }
     updateCustomPrefixVisibility();
 }
 
@@ -204,6 +241,7 @@ void SettingsOverlayComponent::showBpmEditor()
     bpmPopupEditor.setBounds(bpmStepper.getBounds());
     bpmPopupEditor.setText(juce::String(processor.projectBPM), false);
     bpmPopupEditor.setVisible(true);
+    bpmPopupEditor.toFront(true);  // draw on top of stepper so user can type
     bpmPopupEditor.grabKeyboardFocus();
     bpmPopupEditor.selectAll();
 }
@@ -256,6 +294,17 @@ void SettingsOverlayComponent::resized()
     outputPathLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, kRowHeight);
     y += kRowHeight + 8;
     browseOutputBtn.setBounds(kContentPad + 12, y, 84, 28);
+    y += 36 + kExtraPad;
+    sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
+    y += kSectionGap;
+
+    // Batch + Folder section
+    sectionTop = y;
+    batchPlusFolderTitleLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
+    y += 26;
+    batchPlusPathLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, kRowHeight);
+    y += kRowHeight + 8;
+    browseBatchPlusBtn.setBounds(kContentPad + 12, y, 84, 28);
     y += 36 + kExtraPad;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
     y += kSectionGap;

@@ -56,6 +56,8 @@ public:
 
     // === Core Logic ===
     juce::File outputDirectory;
+    /** Folder used by Batch + to add all audio (e.g. Ableton project recordings). Must be set in Settings. */
+    juce::File batchPlusFolder;
     juce::String projectKey = "C Major";
     int projectBPM = 120;
     juce::String defaultGenre = "Unknown";
@@ -75,10 +77,17 @@ public:
     juce::Array<SampleInfo> processed;
 
     void setOutputDirectory(const juce::File& dir);
+    void setBatchPlusFolder(const juce::File& dir);
+    /** If batchPlusFolder is not set, try to find an Ableton project "Samples" folder in Music/Documents. */
+    void tryAutoDetectAbletonSamplesFolder();
     void addFiles(const juce::Array<juce::File>& files);
     void addFilesFromFolder(const juce::File& directory);
+    /** Adds all WAV/AIFF files from directory and all subdirectories to the queue. */
+    void addFilesFromFolderRecursive(const juce::File& directory);
     void processAll();
     void clearQueue();
+    /** Remove queue items at the given indices (0-based). Indices are removed in reverse order. */
+    void removeQueueItemsAt(const juce::Array<int>& indices);
 
     juce::String detectCategory(const juce::String& filename);
     juce::String detectType(const juce::String& filename);

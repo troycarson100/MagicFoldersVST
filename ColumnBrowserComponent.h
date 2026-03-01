@@ -4,7 +4,8 @@
 #include "AssetLoader.h"
 
 /** Finder-style column browser: N columns of folders/files, resizable dividers. */
-class ColumnBrowserComponent : public juce::Component
+class ColumnBrowserComponent : public juce::Component,
+                               public juce::DragAndDropTarget
 {
 public:
     ColumnBrowserComponent();
@@ -17,8 +18,17 @@ public:
     void mouseUp(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
 
+    // DragAndDropTarget: accept drops of files/folders onto folder rows
+    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragEnter(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragMove(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragExit(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDropped(const juce::DragAndDropTarget::SourceDetails& details) override;
+
     void setRootFolder(const juce::File& root);
     void setPath(const juce::Array<juce::File>& path);
+    /** Re-read folder contents from disk and repaint (e.g. after Process Samples creates new folders). */
+    void refreshFromDisk();
     juce::File getSelectedFolder() const;  // last folder in path, or root if path empty
     juce::Array<juce::File> getPath() const { return path; }
     juce::File getFileAt(int column, int row) const;
@@ -39,6 +49,8 @@ public:
     static constexpr int kRowHeight = 34;
     static constexpr int kCol1Width = 200;
     static constexpr int kCol2Width = 200;
+    /** Prefix for internal drag description so we accept our own file/folder drags. */
+    static const juce::String kInternalDragPrefix;
     static juce::StringArray getDefaultCategories();
 
 private:
@@ -46,9 +58,17 @@ private:
     juce::Array<juce::File> path;
     juce::Array<juce::Array<juce::File>> columnItems;  // per column: dirs then files in last column
     juce::Array<int> selectedRowInColumn;
+    juce::Array<juce::Array<int>> selectedRowsPerColumn;  // multi-select per column
+    juce::Array<int> anchorRowInColumn;  // for shift-click range in each column
     juce::Array<int> columnWidths;
     int draggingDivider = -1;
     int lastDividerX = 0;
+    int pendingClickCol = -1;
+    int pendingClickRow = -1;
+    juce::Point<int> mouseDownPosition;
+    bool didStartFileDrag = false;
+    int dropHighlightCol = -1;
+    int dropHighlightRow = -1;
     int editingColumn = -1;
     int editingRow = -1;
     juce::TextEditor renameEditor;
@@ -68,5 +88,6 @@ private:
     int getDividerAtX(int x) const;
     void layoutColumns();
     void paintColumn(juce::Graphics& g, int columnIndex, juce::Rectangle<int> bounds);
+    juce::Image createDragImageForFile(const juce::File& f) const;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ColumnBrowserComponent)
 };

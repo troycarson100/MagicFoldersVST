@@ -168,6 +168,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     setSize(920, 600);
     setResizeLimits(860, 580, 4096, 4096);
     setWantsKeyboardFocus(true);
+    addKeyListener(this);
 
     formatManager.registerBasicFormats();
     sourcePlayer.setSource(&transportSource);
@@ -287,7 +288,46 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     dragLabel.setFont(interFont(15.0f, true));
     dragLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(dragLabel);
+    batchPlusDrawable = AssetLoader::getBatchPlusIcon();
+    batchPlusBtn.setImages(batchPlusDrawable.get());
+    batchPlusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    batchPlusBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
+    batchPlusBtn.onClick = [this] {
+        if (!processor.batchPlusFolder.isDirectory())
+        {
+            processor.tryAutoDetectAbletonSamplesFolder();
+            if (!processor.batchPlusFolder.isDirectory())
+            {
+                breadcrumbLabel.setVisible(true);
+                breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
+                settingsOverlay->syncFromProcessor();
+                settingsOverlay->setVisible(true);
+                settingsOverlay->toFront(true);
+                return;
+            }
+            batchPlusBtn.setEnabled(true);
+        }
+        processor.clearQueue();
+        processor.addFilesFromFolderRecursive(processor.batchPlusFolder);
+        selectedQueueIndices.clear();
+        juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
+        juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
+        const int kQueueLineHeight = 18;
+        const int kQueueHeaderHeight = 20;
+        int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+        queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
+        queueViewport.setVisible(true);
+        dragLabel.setVisible(false);
+        queueLabel.setVisible(false);
+        queueViewport.setBounds(queueViewportBounds);
+        queueListContent.repaint();
+        repaint();
+    };
+    // Auto-detect only runs when user clicks Batch+ (not on load), to avoid freezing host and Apple Music permission
+    batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
+    addAndMakeVisible(batchPlusBtn);
     queueListContent.editor = this;
+    queueListContent.setWantsKeyboardFocus(true);
     queueViewport.setViewedComponent(&queueListContent, false);
     queueViewport.setScrollBarsShown(true, false);
     addChildComponent(queueViewport);
@@ -326,6 +366,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
                 breadcrumbLabel.setVisible(true);
                 breadcrumbLabel.setText("Done! " + juce::String(processor.processed.size()) + " samples organized.", juce::dontSendNotification);
                 refreshPackList();
+                columnBrowser.refreshFromDisk();
                 dragLabel.setVisible(true);
                 queueViewport.setVisible(false);
                 queueLabel.setVisible(false);
@@ -346,7 +387,11 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     };
     addAndMakeVisible(processBtn);
 
-    settingsOverlay->onClose = [this] { settingsOverlay->setVisible(false); refreshPackList(); };
+    settingsOverlay->onClose = [this] {
+        settingsOverlay->setVisible(false);
+        refreshPackList();
+        batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
+    };
     addChildComponent(settingsOverlay.get());
 
     refreshPackList();
@@ -377,20 +422,161 @@ void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
     const int padH = 8;
     const int headerTopPad = 2;
     const int lineHeight = 18;
+    const int headerHeight = headerTopPad + lineHeight;  // 20
     g.setColour(textCharcoal);
-    // Bold header at top: "X samples in queue"
-    g.setFont(interFont(14.0f, true));
+    // Bold header at top: "X samples in queue" (same size as queue items, bold)
+    g.setFont(interFont(12.0f, true));
     juce::String header = juce::String(q.size()) + (q.size() == 1 ? " sample in queue" : " samples in queue");
     g.drawText(header, padH, headerTopPad, getWidth() - 2 * padH, lineHeight, juce::Justification::topLeft, true);
-    // Sample names below
+    // Sample names below, with selection highlight
     g.setFont(interFont(12.0f));
-    int y = headerTopPad + lineHeight;
-    for (const auto& info : q)
+    int y = headerHeight;
+    for (int i = 0; i < q.size(); ++i)
     {
-        juce::String name = info.sourceFile.getFileName();
-        g.drawText(name, padH, y, getWidth() - 2 * padH, lineHeight, juce::Justification::topLeft, true);
+        if (editor->selectedQueueIndices.contains(i))
+        {
+            g.setColour(FinderTheme::sidebarRowSelected);
+            g.fillRect(0, y, getWidth(), lineHeight);
+            g.setColour(FinderTheme::textOnDark);
+        }
+        juce::String name = q.getReference(i).sourceFile.getFileName();
+        g.drawText(name, padH, y, getWidth() - 2 * padH, lineHeight, juce::Justification::centredLeft, true);
+        if (editor->selectedQueueIndices.contains(i))
+            g.setColour(textCharcoal);
         y += lineHeight;
     }
+}
+
+void SampleOrganizerEditor::QueueListContent::mouseDown(const juce::MouseEvent& e)
+{
+    if (!editor) return;
+    auto& q = editor->processor.queue;
+    if (q.isEmpty()) return;
+    const int headerHeight = 20;
+    const int lineHeight = 18;
+    int y = e.getPosition().getY();
+    if (y < headerHeight) return;
+    int row = (y - headerHeight) / lineHeight;
+    if (row < 0 || row >= q.size()) return;
+    grabKeyboardFocus();
+
+    if (e.mods.isRightButtonDown())
+    {
+        if (!editor->selectedQueueIndices.contains(row))
+        {
+            editor->selectedQueueIndices.clear();
+            editor->selectedQueueIndices.add(row);
+            editor->queueAnchorIndex = row;
+        }
+        juce::PopupMenu m;
+        m.addItem(1, "Remove");
+        m.showMenuAsync(juce::PopupMenu::Options(), [this](int result) {
+            if (result == 1 && editor)
+                editor->removeSelectedQueueItems();
+        });
+        repaint();
+        return;
+    }
+
+    bool cmdOrCtrl = (e.mods.isCommandDown() || e.mods.isCtrlDown());
+    if (e.mods.isShiftDown())
+    {
+        int anchor = editor->queueAnchorIndex >= 0 ? editor->queueAnchorIndex : row;
+        int lo = juce::jmin(anchor, row);
+        int hi = juce::jmax(anchor, row);
+        editor->selectedQueueIndices.clear();
+        for (int i = lo; i <= hi; ++i)
+            editor->selectedQueueIndices.add(i);
+    }
+    else if (cmdOrCtrl)
+    {
+        if (editor->selectedQueueIndices.contains(row))
+            editor->selectedQueueIndices.removeAllInstancesOf(row);
+        else
+            editor->selectedQueueIndices.add(row);
+        editor->selectedQueueIndices.sort();
+    }
+    else
+    {
+        editor->selectedQueueIndices.clear();
+        editor->selectedQueueIndices.add(row);
+        editor->queueAnchorIndex = row;
+    }
+    editor->selectedQueueIndices.sort();
+    repaint();
+}
+
+bool SampleOrganizerEditor::QueueListContent::keyPressed(const juce::KeyPress& key)
+{
+    if (!editor || editor->selectedQueueIndices.isEmpty())
+        return false;
+    if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey)
+    {
+        editor->removeSelectedQueueItems();
+        return true;
+    }
+    return false;
+}
+
+void SampleOrganizerEditor::removeSelectedQueueItems()
+{
+    if (selectedQueueIndices.isEmpty()) return;
+    juce::Array<juce::File> removedFiles;
+    for (int idx : selectedQueueIndices)
+        if (idx >= 0 && idx < processor.queue.size())
+            removedFiles.add(processor.queue.getReference(idx).sourceFile);
+    processor.removeQueueItemsAt(selectedQueueIndices);
+    if (removedFiles.size() > 0)
+    {
+        undoQueueRemoveStack.push_back(removedFiles);
+        if (undoQueueRemoveStack.size() > (size_t)kMaxUndoQueueRemove)
+            undoQueueRemoveStack.erase(undoQueueRemoveStack.begin());
+    }
+    selectedQueueIndices.clear();
+    juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
+    juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
+    const int kQueueLineHeight = 18;
+    const int kQueueHeaderHeight = 20;
+    int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+    queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
+    queueListContent.repaint();
+    if (processor.queue.isEmpty())
+    {
+        dragLabel.setVisible(true);
+        queueViewport.setVisible(false);
+    }
+    repaint();
+}
+
+void SampleOrganizerEditor::undoLastQueueRemove()
+{
+    if (undoQueueRemoveStack.empty()) return;
+    juce::Array<juce::File> files = undoQueueRemoveStack.back();
+    undoQueueRemoveStack.pop_back();
+    processor.addFiles(files);
+    juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
+    juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
+    const int kQueueLineHeight = 18;
+    const int kQueueHeaderHeight = 20;
+    int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+    queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
+    queueViewport.setVisible(true);
+    dragLabel.setVisible(false);
+    queueLabel.setVisible(false);
+    queueViewport.setBounds(queueViewportBounds);
+    queueListContent.repaint();
+    repaint();
+}
+
+bool SampleOrganizerEditor::keyPressed(const juce::KeyPress& key, juce::Component*)
+{
+    int k = key.getKeyCode();
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) && (k == 'z' || k == 'Z'))
+    {
+        undoLastQueueRemove();
+        return true;
+    }
+    return false;
 }
 
 void SampleOrganizerEditor::paint(juce::Graphics& g)
@@ -501,7 +687,17 @@ void SampleOrganizerEditor::resized()
     columnPlaceholderLabel.setBounds(colBounds);
     juce::Rectangle<int> dragBounds = getDragAreaBounds();
     dragArea.setBounds(dragBounds);
+    const int kBatchPlusInsetH = 8;
+    const int kBatchPlusW = 80;
+    const int kBatchPlusH = 36;
+    const int kBatchPlusTopInset = -6;  // slightly below top so button doesn't overlap dash border
+    batchPlusBtn.setBounds(dragBounds.getRight() - kBatchPlusW - kBatchPlusInsetH,
+                           dragBounds.getY() + kBatchPlusTopInset,
+                           kBatchPlusW, kBatchPlusH);
+    batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
+    batchPlusBtn.toFront(true);
     juce::Rectangle<int> dragInner = dragBounds.reduced(16, 10);
+    juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
     dragLabel.setBounds(dragInner);
     queueLabel.setBounds(dragInner);
     const int kQueueLineHeight = 18;
@@ -510,9 +706,9 @@ void SampleOrganizerEditor::resized()
     {
         dragLabel.setVisible(false);
         queueLabel.setVisible(false);
-        queueViewport.setBounds(dragInner);
+        queueViewport.setBounds(queueViewportBounds);
         int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
-        queueListContent.setSize(dragInner.getWidth(), juce::jmax(dragInner.getHeight(), contentH));
+        queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
         queueViewport.setVisible(true);
     }
     else
@@ -1062,11 +1258,12 @@ void SampleOrganizerEditor::filesDropped(const juce::StringArray& files, int, in
     }
     processor.addFiles(fileArray);
     auto dragInner = getDragAreaBounds().reduced(16, 10);
+    juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
     const int kQueueLineHeight = 18;
     const int kQueueHeaderHeight = 20;
-    queueViewport.setBounds(dragInner);
+    queueViewport.setBounds(queueViewportBounds);
     int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
-    queueListContent.setSize(dragInner.getWidth(), juce::jmax(dragInner.getHeight(), contentH));
+    queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
     queueViewport.setVisible(true);
     dragLabel.setVisible(false);
     queueLabel.setVisible(false);

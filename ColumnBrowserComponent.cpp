@@ -64,6 +64,8 @@ juce::StringArray ColumnBrowserComponent::getDefaultCategories()
     return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "FX", "Loops", "Percussion", "Vocals", "Other" };
 }
 
+const juce::String ColumnBrowserComponent::kInternalDragPrefix = "MagicFolders:";
+
 ColumnBrowserComponent::ColumnBrowserComponent()
 {
     setWantsKeyboardFocus(true);
@@ -259,6 +261,12 @@ void ColumnBrowserComponent::setPath(const juce::Array<juce::File>& newPath)
     }
 }
 
+void ColumnBrowserComponent::refreshFromDisk()
+{
+    refreshColumns();
+    repaint();
+}
+
 juce::File ColumnBrowserComponent::getSelectedFolder() const
 {
     if (path.isEmpty())
@@ -309,6 +317,8 @@ void ColumnBrowserComponent::refreshColumns()
 {
     columnItems.clear();
     selectedRowInColumn.clear();
+    selectedRowsPerColumn.clear();
+    anchorRowInColumn.clear();
     if (!rootFolder.isDirectory())
     {
         repaint();
@@ -324,6 +334,8 @@ void ColumnBrowserComponent::refreshColumns()
     col0.sort(cmp);
     columnItems.add(col0);
     selectedRowInColumn.add(-1);
+    selectedRowsPerColumn.add(juce::Array<int>());
+    anchorRowInColumn.add(-1);
 
     // Columns 1 .. path.size(): one column per path level; last column also gets files
     const int numColumns = 1 + (int)path.size();
@@ -348,6 +360,8 @@ void ColumnBrowserComponent::refreshColumns()
         }
         columnItems.add(items);
         selectedRowInColumn.add(-1);
+        selectedRowsPerColumn.add(juce::Array<int>());
+        anchorRowInColumn.add(-1);
     }
 
     // Ensure at least 3 column slots (like Finder) when path is shallow or empty
@@ -355,6 +369,8 @@ void ColumnBrowserComponent::refreshColumns()
     {
         columnItems.add(juce::Array<juce::File>());
         selectedRowInColumn.add(-1);
+        selectedRowsPerColumn.add(juce::Array<int>());
+        anchorRowInColumn.add(-1);
     }
 
     // Column widths: grow array with default width for new columns
@@ -432,6 +448,7 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         return;
     const auto& items = columnItems.getReference(columnIndex);
     int sel = (columnIndex < selectedRowInColumn.size()) ? selectedRowInColumn[columnIndex] : -1;
+    const bool hasMultiSelect = (columnIndex < selectedRowsPerColumn.size() && !selectedRowsPerColumn.getReference(columnIndex).isEmpty());
     g.setColour(FinderTheme::creamBg);
     g.fillRect(bounds);
     const int padH = 12;
@@ -448,11 +465,21 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         juce::File item = items.getReference(row);
         bool isDir = item.isDirectory();
         bool isCategoryRow = (columnIndex == 0);
-        bool selected = (row == sel);
+        bool selected = hasMultiSelect
+            ? selectedRowsPerColumn.getReference(columnIndex).contains(row)
+            : (row == sel);
+        bool dropTarget = (columnIndex == dropHighlightCol && row == dropHighlightRow);
         if (selected)
         {
             g.setColour(FinderTheme::headerBar);
             g.fillRect(rowRect);
+        }
+        if (dropTarget)
+        {
+            g.setColour(FinderTheme::accent.withAlpha(0.35f));
+            g.fillRect(rowRect);
+            g.setColour(FinderTheme::accent);
+            g.drawRect(rowRect.reduced(1), 2);
         }
         if (isDir || isCategoryRow)
         {
@@ -471,6 +498,19 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         if (columnIndex != editingColumn || row != editingRow)
         {
             g.drawText(item.getFileName(), textRect, juce::Justification::centredLeft, true);
+        }
+    }
+    // Highlight empty area when dropping onto column's parent folder (dropHighlightRow == -1)
+    if (columnIndex == dropHighlightCol && dropHighlightRow == -1)
+    {
+        int emptyTop = bounds.getY() + (int)items.size() * kRowHeight;
+        juce::Rectangle<int> emptyRect(bounds.getX(), emptyTop, bounds.getWidth(), bounds.getBottom() - emptyTop);
+        if (emptyRect.getHeight() > 0)
+        {
+            g.setColour(FinderTheme::accent.withAlpha(0.25f));
+            g.fillRect(emptyRect);
+            g.setColour(FinderTheme::accent);
+            g.drawRect(emptyRect.reduced(1), 2);
         }
     }
 }
@@ -492,6 +532,33 @@ void ColumnBrowserComponent::paint(juce::Graphics& g)
             x += kDividerWidth;
         }
     }
+}
+
+juce::Image ColumnBrowserComponent::createDragImageForFile(const juce::File& f) const
+{
+    const int w = 200;
+    const int h = 44;
+    juce::Image img(juce::Image::ARGB, w, h, true);
+    juce::Graphics g(img);
+    g.fillAll(juce::Colour(0x00000000));
+    g.setColour(juce::Colour(0xe8ffffff));
+    g.fillRoundedRectangle(1, 1, w - 2, h - 2, 6);
+    g.setColour(FinderTheme::textCharcoal.withAlpha(0.4f));
+    g.drawRoundedRectangle(1, 1, w - 2, h - 2, 6, 1);
+    const int iconSize = 28;
+    const int pad = 8;
+    if (folderIcon)
+    {
+        folderIcon->drawWithin(g, juce::Rectangle<float>((float)pad, (float)((h - iconSize) / 2), (float)iconSize, (float)iconSize),
+            juce::RectanglePlacement::stretchToFit, 1.0f);
+    }
+    juce::String name = f.getFileName();
+    if (name.length() > 28)
+        name = name.dropLastCharacters(name.length() - 25) + "...";
+    g.setColour(FinderTheme::textCharcoal);
+    g.setFont(FinderTheme::interFont(13.0f));
+    g.drawText(name, pad + iconSize + 6, 0, w - (pad + iconSize + 6) - pad, h, juce::Justification::centredLeft, true);
+    return img;
 }
 
 void ColumnBrowserComponent::resized()
@@ -519,6 +586,9 @@ void ColumnBrowserComponent::mouseMove(const juce::MouseEvent& e)
 void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
+    didStartFileDrag = false;
+    pendingClickCol = -1;
+    pendingClickRow = -1;
     int div = getDividerAtX(e.getPosition().getX());
     if (div >= 0)
     {
@@ -555,40 +625,101 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         return;
 
     juce::File f = items.getReference(row);
+    const bool cmdOrCtrl = (e.mods.isCommandDown() || e.mods.isCtrlDown());
+
+    if (!e.mods.isRightButtonDown())
+    {
+        while (selectedRowsPerColumn.size() < columnItems.size())
+            selectedRowsPerColumn.add(juce::Array<int>());
+        while (anchorRowInColumn.size() < columnItems.size())
+            anchorRowInColumn.add(-1);
+        juce::Array<int>& selRows = selectedRowsPerColumn.getReference(col);
+        int& anchor = anchorRowInColumn.getReference(col);
+
+        if (e.mods.isShiftDown())
+        {
+            int a = anchor >= 0 ? anchor : row;
+            int lo = juce::jmin(a, row);
+            int hi = juce::jmax(a, row);
+            selRows.clear();
+            for (int r = lo; r <= hi; ++r)
+                selRows.add(r);
+            selectedRowInColumn.set(col, row);
+            repaint();
+            return;
+        }
+        if (cmdOrCtrl)
+        {
+            if (selRows.contains(row))
+                selRows.removeAllInstancesOf(row);
+            else
+                selRows.add(row);
+            selectedRowInColumn.set(col, selRows.isEmpty() ? -1 : row);
+            anchor = row;
+            repaint();
+            return;
+        }
+        selRows.clear();
+        selRows.add(row);
+        anchor = row;
+        repaint();
+    }
+
     if (e.mods.isRightButtonDown())
     {
+        while (selectedRowsPerColumn.size() < columnItems.size())
+            selectedRowsPerColumn.add(juce::Array<int>());
+        if (col < selectedRowsPerColumn.size() && selectedRowsPerColumn.getReference(col).contains(row))
+            { /* keep multi-selection for Remove */ }
+        else
+        {
+            selectedRowsPerColumn.getReference(col).clear();
+            selectedRowsPerColumn.getReference(col).add(row);
+        }
         selectedRowInColumn.set(col, row);
         repaint();
+        juce::Array<juce::File> toDelete;
+        if (col < selectedRowsPerColumn.size() && !selectedRowsPerColumn.getReference(col).isEmpty())
+        {
+            const auto& colItems = columnItems.getReference(col);
+            for (int r : selectedRowsPerColumn.getReference(col))
+                if (r >= 0 && r < colItems.size())
+                    toDelete.add(colItems.getReference(r));
+        }
+        else
+            toDelete.add(f);
         juce::PopupMenu m;
         m.addItem(1, "Rename");
         bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
         juce::String revealLabel = isMac ? "Reveal in Finder" : "Reveal in File Explorer";
         m.addItem(2, revealLabel);
         m.addSeparator();
-        m.addItem(3, "Delete");
+        m.addItem(3, toDelete.size() > 1 ? "Remove " + juce::String(toDelete.size()) + " items" : "Remove");
         auto opts = juce::PopupMenu::Options()
             .withParentComponent(getTopLevelComponent())
             .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
             .withMousePosition();
-        m.showMenuAsync(opts, [this, col, row, f](int result) {
+        m.showMenuAsync(opts, [this, toDelete, col, row](int result) {
                 if (result == 1)
                     startInlineRename(col, row);
-                else if (result == 2 && f.exists())
-                    f.revealToUser();
-                else if (result == 3 && f.exists())
+                else if (result == 2 && toDelete.size() == 1 && toDelete.getReference(0).exists())
+                    toDelete.getReference(0).revealToUser();
+                else if (result == 3)
                 {
-                    if (f == rootFolder)
-                        return;
-                    f.moveToTrash();
-                    if (path.contains(f))
+                    for (const auto& file : toDelete)
                     {
-                        juce::Array<juce::File> newPath;
-                        for (const auto& p : path)
+                        if (!file.exists() || file == rootFolder) continue;
+                        file.moveToTrash();
+                        if (path.contains(file))
                         {
-                            if (p == f) break;
-                            newPath.add(p);
+                            juce::Array<juce::File> newPath;
+                            for (const auto& p : path)
+                            {
+                                if (p == file) break;
+                                newPath.add(p);
+                            }
+                            setPath(newPath);
                         }
-                        setPath(newPath);
                     }
                     refreshColumns();
                     if (onPathChanged)
@@ -599,17 +730,10 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
     }
 
     selectedRowInColumn.set(col, row);
+    pendingClickCol = col;
+    pendingClickRow = row;
+    mouseDownPosition = e.getPosition();
     repaint();
-    if (f.isDirectory())
-    {
-        if (onFolderSelected)
-            onFolderSelected(col, row);
-    }
-    else
-    {
-        if (col == columnItems.size() - 1 && onFileSelected)
-            onFileSelected(row);
-    }
 }
 
 void ColumnBrowserComponent::mouseDoubleClick(const juce::MouseEvent& e)
@@ -624,22 +748,47 @@ void ColumnBrowserComponent::mouseDoubleClick(const juce::MouseEvent& e)
     startInlineRename(col, row);
 }
 
+static const int kDragStartThresholdPx = 6;
+
 void ColumnBrowserComponent::mouseDrag(const juce::MouseEvent& e)
 {
-    if (draggingDivider < 0)
+    if (draggingDivider >= 0)
+    {
+        const int leftCol = draggingDivider;
+        const int rightCol = draggingDivider + 1;
+        if (rightCol >= columnWidths.size())
+            return;
+        int dx = e.getPosition().getX() - lastDividerX;
+        lastDividerX = e.getPosition().getX();
+        int newLeft = juce::jmax(kMinColumnWidth, columnWidths[leftCol] + dx);
+        int newRight = juce::jmax(kMinColumnWidth, columnWidths[rightCol] - dx);
+        columnWidths.set(leftCol, newLeft);
+        columnWidths.set(rightCol, newRight);
+        repaint();
         return;
-    // Divider i sits between column i and column i+1. Resize only those two columns.
-    const int leftCol = draggingDivider;
-    const int rightCol = draggingDivider + 1;
-    if (rightCol >= columnWidths.size())
-        return;
-    int dx = e.getPosition().getX() - lastDividerX;
-    lastDividerX = e.getPosition().getX();
-    int newLeft = juce::jmax(kMinColumnWidth, columnWidths[leftCol] + dx);
-    int newRight = juce::jmax(kMinColumnWidth, columnWidths[rightCol] - dx);
-    columnWidths.set(leftCol, newLeft);
-    columnWidths.set(rightCol, newRight);
-    repaint();
+    }
+    // Start file/folder drag if we have a valid row and moved past threshold
+    if (pendingClickCol >= 0 && pendingClickRow >= 0 && !didStartFileDrag)
+    {
+        if (pendingClickCol >= columnItems.size())
+            return;
+        const auto& items = columnItems.getReference(pendingClickCol);
+        if (pendingClickRow >= items.size())
+            return;
+        juce::Point<int> delta = e.getPosition() - mouseDownPosition;
+        if (delta.getDistanceFromOrigin() >= kDragStartThresholdPx)
+        {
+            juce::File f = items.getReference(pendingClickRow);
+            juce::String pathStr = f.getFullPathName();
+            juce::var desc(kInternalDragPrefix + pathStr);
+            if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
+            {
+                juce::Image dragImage = createDragImageForFile(f);
+                container->startDragging(desc, this, dragImage, true);
+                didStartFileDrag = true;
+            }
+        }
+    }
 }
 
 void ColumnBrowserComponent::mouseUp(const juce::MouseEvent&)
@@ -647,6 +796,188 @@ void ColumnBrowserComponent::mouseUp(const juce::MouseEvent&)
     if (draggingDivider >= 0 && onColumnWidthsChanged)
         onColumnWidthsChanged();
     draggingDivider = -1;
+    // Deferred click: navigate into folder or trigger file selection if we didn't start a drag
+    if (pendingClickCol >= 0 && pendingClickRow >= 0 && !didStartFileDrag)
+    {
+        int col = pendingClickCol;
+        int row = pendingClickRow;
+        pendingClickCol = -1;
+        pendingClickRow = -1;
+        if (col < columnItems.size())
+        {
+            const auto& items = columnItems.getReference(col);
+            if (row < items.size())
+            {
+                juce::File f = items.getReference(row);
+                if (f.isDirectory() && onFolderSelected)
+                    onFolderSelected(col, row);
+                else if (col == (int)columnItems.size() - 1 && onFileSelected)
+                    onFileSelected(row);
+            }
+        }
+    }
+    else
+    {
+        pendingClickCol = -1;
+        pendingClickRow = -1;
+    }
+}
+
+bool ColumnBrowserComponent::isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    juce::String desc = details.description.toString();
+    return desc.startsWith(kInternalDragPrefix);
+}
+
+void ColumnBrowserComponent::itemDragEnter(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    int col = getColumnAtX(details.localPosition.getX());
+    int row = details.localPosition.getY() / kRowHeight;
+    if (col >= 0 && col < columnItems.size() && row >= 0)
+    {
+        const auto& items = columnItems.getReference(col);
+        juce::File parentFolder = getParentForColumn(col);
+        if (row < items.size())
+        {
+            if (items.getReference(row).isDirectory())
+            {
+                dropHighlightCol = col;
+                dropHighlightRow = row;
+                repaint();
+            }
+            else
+                dropHighlightCol = dropHighlightRow = -1;
+        }
+        else if (parentFolder.isDirectory())
+        {
+            // Drop in empty area below items = drop into this column's parent folder
+            dropHighlightCol = col;
+            dropHighlightRow = -1;  // sentinel: means "column parent"
+            repaint();
+        }
+        else
+            dropHighlightCol = dropHighlightRow = -1;
+    }
+    else
+        dropHighlightCol = dropHighlightRow = -1;
+}
+
+void ColumnBrowserComponent::itemDragMove(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    int col = getColumnAtX(details.localPosition.getX());
+    int row = details.localPosition.getY() / kRowHeight;
+    if (col >= 0 && col < columnItems.size() && row >= 0)
+    {
+        const auto& items = columnItems.getReference(col);
+        juce::File parentFolder = getParentForColumn(col);
+        if (row < items.size())
+        {
+            if (items.getReference(row).isDirectory())
+            {
+                if (col != dropHighlightCol || row != dropHighlightRow)
+                {
+                    dropHighlightCol = col;
+                    dropHighlightRow = row;
+                    repaint();
+                }
+            }
+            else
+            {
+                if (dropHighlightCol >= 0 || dropHighlightRow >= 0)
+                {
+                    dropHighlightCol = dropHighlightRow = -1;
+                    repaint();
+                }
+            }
+        }
+        else if (parentFolder.isDirectory())
+        {
+            if (col != dropHighlightCol || dropHighlightRow != -1)
+            {
+                dropHighlightCol = col;
+                dropHighlightRow = -1;
+                repaint();
+            }
+        }
+        else
+        {
+            if (dropHighlightCol >= 0 || dropHighlightRow >= 0)
+            {
+                dropHighlightCol = dropHighlightRow = -1;
+                repaint();
+            }
+        }
+    }
+    else
+    {
+        if (dropHighlightCol >= 0 || dropHighlightRow >= 0)
+        {
+            dropHighlightCol = dropHighlightRow = -1;
+            repaint();
+        }
+    }
+}
+
+void ColumnBrowserComponent::itemDragExit(const juce::DragAndDropTarget::SourceDetails&)
+{
+    if (dropHighlightCol >= 0 || dropHighlightRow >= 0)
+    {
+        dropHighlightCol = dropHighlightRow = -1;
+        repaint();
+    }
+}
+
+void ColumnBrowserComponent::itemDropped(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    dropHighlightCol = dropHighlightRow = -1;
+    repaint();
+    juce::String desc = details.description.toString();
+    if (!desc.startsWith(kInternalDragPrefix))
+        return;
+    juce::String pathStr = desc.substring(kInternalDragPrefix.length()).trim();
+    juce::File sourceFile(pathStr);
+    if (!sourceFile.exists())
+        return;
+    int col = getColumnAtX(details.localPosition.getX());
+    int row = details.localPosition.getY() / kRowHeight;
+    if (col < 0 || col >= columnItems.size() || row < 0)
+        return;
+    const auto& items = columnItems.getReference(col);
+    juce::File destFolder;
+    if (row < items.size())
+        destFolder = items.getReference(row);
+    else
+        destFolder = getParentForColumn(col);  // drop in empty area below items = move into column's parent folder
+    if (!destFolder.isDirectory())
+        return;
+    if (sourceFile.getFullPathName() == destFolder.getFullPathName())
+        return;
+    if (sourceFile.getParentDirectory().getFullPathName() == destFolder.getFullPathName())
+        return; // already in this folder
+    // Don't move a folder into itself or into one of its descendants
+    juce::String sourcePath = sourceFile.getFullPathName();
+    juce::String destPath = destFolder.getFullPathName();
+    if (sourceFile.isDirectory() && destPath.startsWith(sourcePath + juce::File::getSeparatorString()))
+        return;
+    juce::File destFile = destFolder.getChildFile(sourceFile.getFileName());
+    if (destFile.exists() && destFile.getFullPathName() != sourceFile.getFullPathName())
+        return; // would overwrite; could add suffix later
+    if (!sourceFile.moveFileTo(destFile))
+        return;
+    // If we moved a folder that's in the current path, truncate path so columns stay valid
+    juce::Array<juce::File> newPath;
+    for (int i = 0; i < path.size(); ++i)
+    {
+        if (path.getReference(i).getFullPathName() == sourcePath)
+            break;
+        newPath.add(path.getReference(i));
+    }
+    if (newPath.size() < path.size())
+        setPath(newPath);
+    else
+        refreshColumns();
+    if (onPathChanged)
+        onPathChanged();
 }
 
 bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)

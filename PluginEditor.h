@@ -7,7 +7,9 @@
 #include "SettingsOverlayComponent.h"
 
 class SampleOrganizerEditor : public juce::AudioProcessorEditor,
-                              public juce::FileDragAndDropTarget
+                              public juce::FileDragAndDropTarget,
+                              public juce::DragAndDropContainer,
+                              public juce::KeyListener
 {
 public:
     SampleOrganizerEditor(SampleOrganizerProcessor&);
@@ -28,7 +30,8 @@ private:
     static constexpr int kLogoPanelWidth = 220;
     static constexpr int kSidebarWidth = 220;
     static constexpr int kHeaderHeight = 52;
-    static constexpr int kDragAreaHeight = 72;
+    static constexpr int kDragAreaHeight = 108;  // 50% taller than original 72
+    static constexpr int kBatchPlusRightMargin = 88;  // width + inset so queue scrollbar stays left of Batch+ button
     static constexpr int kDragAreaPadding = 16;       // margin on all sides of drag area
     static constexpr int kDragAreaPaddingVertical = 16;  // same as kDragAreaPadding for even spacing
     static constexpr int kProcessButtonHeight = 52;
@@ -93,13 +96,24 @@ private:
     // Drag area & process
     juce::Component dragArea;
     juce::Label dragLabel;
+    std::unique_ptr<juce::Drawable> batchPlusDrawable;
+    juce::DrawableButton batchPlusBtn { "Batch+", juce::DrawableButton::ImageFitted };
     juce::Viewport queueViewport;
     struct QueueListContent : juce::Component
     {
         SampleOrganizerEditor* editor = nullptr;
         void paint(juce::Graphics& g) override;
+        void mouseDown(const juce::MouseEvent& e) override;
+        bool keyPressed(const juce::KeyPress& key) override;
     };
     QueueListContent queueListContent;
+    juce::Array<int> selectedQueueIndices;
+    int queueAnchorIndex = -1;  // for shift-click range selection
+    void removeSelectedQueueItems();
+    bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override;
+    static constexpr int kMaxUndoQueueRemove = 20;
+    std::vector<juce::Array<juce::File>> undoQueueRemoveStack;
+    void undoLastQueueRemove();
     juce::Label queueLabel;
     juce::TextButton processBtn;
     bool isDragOver = false;
