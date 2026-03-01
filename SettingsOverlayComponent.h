@@ -16,8 +16,8 @@ public:
 
 private:
     SampleOrganizerProcessor& processor;
-    juce::DrawableButton backBtn { "Back", juce::DrawableButton::ImageFitted };
-    juce::Label titleLabel;
+    std::unique_ptr<juce::Drawable> closeIconDrawable;
+    juce::DrawableButton closeBtn { "Close", juce::DrawableButton::ImageFitted };
 
     juce::Label outputFolderTitleLabel;
     juce::Label outputPathLabel;
@@ -33,19 +33,19 @@ private:
     juce::Label manualKeyLabel;
     juce::ComboBox keySelector;
 
-    juce::Label genreLabel;
-    juce::TextEditor genreEditor;
-
     juce::Label namingFormatLabel;
     juce::ComboBox namingFormatCombo;
     juce::Label customPrefixLabel;
     juce::TextEditor customPrefixEditor;
 
     juce::ToggleButton overwriteDuplicatesToggle;
-    juce::ToggleButton themeLightToggle;
 
     juce::Viewport scrollViewport;
-    juce::Component content;
+    struct ContentArea : juce::Component
+    {
+        void paint(juce::Graphics& g) override { g.fillAll(FinderTheme::creamBg); }
+    };
+    ContentArea content;
 
     static juce::StringArray getKeyList();
     static juce::StringArray getNamingFormatOptions();

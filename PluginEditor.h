@@ -40,6 +40,8 @@ private:
     std::unique_ptr<juce::Drawable> arrowRightDrawable;
     juce::DrawableButton plusBtn { "Plus", juce::DrawableButton::ImageFitted };
     juce::ListBox packList;
+    juce::TextEditor packRenameEditor;
+    int editingPackRow = -1;
     juce::StringArray packNames;
     juce::Array<juce::File> packDirs;
     int selectedPackIndex = -1;
@@ -104,6 +106,10 @@ private:
     void mouseEnter(const juce::MouseEvent& e) override;
     void mouseDown(const juce::MouseEvent&) override;
     void setHoveredPackRow(int row);
+    void tryRenamePack(int row);  // starts inline rename on pack list
+    void startPackInlineRename(int row);
+    void commitPackRename();
+    void hidePackRenameEditor();
     void handleBreadcrumbClick(int x, int y);
 
     struct PackListHoverListener : juce::MouseListener
@@ -111,6 +117,7 @@ private:
         SampleOrganizerEditor* editor = nullptr;
         void mouseMove(const juce::MouseEvent& e) override;
         void mouseExit(const juce::MouseEvent& e) override;
+        void mouseDoubleClick(const juce::MouseEvent& e) override;
     };
     std::unique_ptr<PackListHoverListener> packListHoverListener;
     void updateForwardButtonState();

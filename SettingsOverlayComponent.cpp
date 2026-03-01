@@ -6,7 +6,8 @@ namespace
 {
     constexpr int kHeaderHeight = 52;
     constexpr int kRowHeight = 28;
-    constexpr int kSectionGap = 16;
+    constexpr int kSectionGap = 20;
+    constexpr int kContentPad = 28;
 }
 
 juce::StringArray SettingsOverlayComponent::getKeyList()
@@ -29,20 +30,32 @@ void SettingsOverlayComponent::updateCustomPrefixVisibility()
     customPrefixEditor.setVisible(show);
 }
 
+namespace
+{
+    std::unique_ptr<juce::Drawable> createCloseXIcon()
+    {
+        juce::Path p;
+        p.addLineSegment(juce::Line<float>(9.f, 9.f, 15.f, 15.f), 0.f);
+        p.addLineSegment(juce::Line<float>(15.f, 9.f, 9.f, 15.f), 0.f);
+        juce::Path strokePath;
+        juce::PathStrokeType(1.8f).createStrokedPath(strokePath, p);
+        auto drawable = std::make_unique<juce::DrawablePath>();
+        static_cast<juce::DrawablePath*>(drawable.get())->setPath(strokePath);
+        static_cast<juce::DrawablePath*>(drawable.get())->setFill(juce::FillType(FinderTheme::textOnDark));
+        return drawable;
+    }
+}
+
 SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& proc)
     : processor(proc)
 {
     setAlwaysOnTop(true);
-    std::unique_ptr<juce::Drawable> backArrow = AssetLoader::getWhiteArrowLeft();
-    backBtn.setImages(backArrow.get());
-    backBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
-    backBtn.onClick = [this] { if (onClose) onClose(); };
-    addAndMakeVisible(backBtn);
-
-    titleLabel.setText("Settings", juce::dontSendNotification);
-    titleLabel.setColour(juce::Label::textColourId, textOnDark);
-    titleLabel.setVisible(false);
-    addChildComponent(titleLabel);
+    closeIconDrawable = createCloseXIcon();
+    closeBtn.setImages(closeIconDrawable.get());
+    closeBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    closeBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
+    closeBtn.onClick = [this] { if (onClose) onClose(); };
+    addAndMakeVisible(closeBtn);
 
     outputFolderTitleLabel.setText("Output Folder", juce::dontSendNotification);
     outputFolderTitleLabel.setColour(juce::Label::textColourId, textCharcoal);
@@ -108,28 +121,23 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     manualKeyLabel.setColour(juce::Label::textColourId, textCharcoal);
     addAndMakeVisible(manualKeyLabel);
     keySelector.addItemList(getKeyList(), 1);
-    keySelector.setColour(juce::ComboBox::backgroundColourId, creamBg);
+    keySelector.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xffE0DDD6));
     keySelector.setColour(juce::ComboBox::textColourId, textCharcoal);
-    keySelector.setColour(juce::ComboBox::outlineColourId, dividerLine);
+    keySelector.setColour(juce::ComboBox::outlineColourId, topBar);
+    keySelector.setColour(juce::ComboBox::buttonColourId, juce::Colour(0xff393E46));
+    keySelector.setColour(juce::ComboBox::arrowColourId, textOnDark);
     keySelector.onChange = [this] { processor.projectKey = keySelector.getText(); };
     addAndMakeVisible(keySelector);
-
-    genreLabel.setText("Genre Tag", juce::dontSendNotification);
-    genreLabel.setColour(juce::Label::textColourId, textCharcoal);
-    addAndMakeVisible(genreLabel);
-    genreEditor.setColour(juce::TextEditor::backgroundColourId, creamBg);
-    genreEditor.setColour(juce::TextEditor::textColourId, textCharcoal);
-    genreEditor.setColour(juce::TextEditor::outlineColourId, dividerLine);
-    genreEditor.onTextChange = [this] { processor.defaultGenre = genreEditor.getText(); };
-    addAndMakeVisible(genreEditor);
 
     namingFormatLabel.setText("Naming Format", juce::dontSendNotification);
     namingFormatLabel.setColour(juce::Label::textColourId, textCharcoal);
     addAndMakeVisible(namingFormatLabel);
     namingFormatCombo.addItemList(getNamingFormatOptions(), 1);
-    namingFormatCombo.setColour(juce::ComboBox::backgroundColourId, creamBg);
+    namingFormatCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xffE0DDD6));
     namingFormatCombo.setColour(juce::ComboBox::textColourId, textCharcoal);
-    namingFormatCombo.setColour(juce::ComboBox::outlineColourId, dividerLine);
+    namingFormatCombo.setColour(juce::ComboBox::outlineColourId, topBar);
+    namingFormatCombo.setColour(juce::ComboBox::buttonColourId, juce::Colour(0xff393E46));
+    namingFormatCombo.setColour(juce::ComboBox::arrowColourId, textOnDark);
     namingFormatCombo.onChange = [this] {
         processor.namingFormat = namingFormatCombo.getSelectedItemIndex();
         updateCustomPrefixVisibility();
@@ -141,7 +149,7 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     addAndMakeVisible(customPrefixLabel);
     customPrefixEditor.setColour(juce::TextEditor::backgroundColourId, creamBg);
     customPrefixEditor.setColour(juce::TextEditor::textColourId, textCharcoal);
-    customPrefixEditor.setColour(juce::TextEditor::outlineColourId, dividerLine);
+    customPrefixEditor.setColour(juce::TextEditor::outlineColourId, topBar);
     customPrefixEditor.onTextChange = [this] { processor.customPrefix = customPrefixEditor.getText(); };
     addAndMakeVisible(customPrefixEditor);
 
@@ -150,12 +158,6 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     overwriteDuplicatesToggle.setColour(juce::ToggleButton::textColourId, textCharcoal);
     overwriteDuplicatesToggle.onClick = [this] { processor.overwriteDuplicates = overwriteDuplicatesToggle.getToggleState(); };
     addAndMakeVisible(overwriteDuplicatesToggle);
-
-    themeLightToggle.setButtonText("Theme: Light / Dark");
-    themeLightToggle.setColour(juce::ToggleButton::tickColourId, textCharcoal);
-    themeLightToggle.setColour(juce::ToggleButton::textColourId, textCharcoal);
-    themeLightToggle.onClick = [this] { processor.themeLight = !themeLightToggle.getToggleState(); };
-    addAndMakeVisible(themeLightToggle);
 
     scrollViewport.setViewedComponent(&content, false);
     scrollViewport.setScrollBarsShown(true, false);
@@ -172,14 +174,11 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     content.addAndMakeVisible(autoDetectKeyToggle);
     content.addAndMakeVisible(manualKeyLabel);
     content.addAndMakeVisible(keySelector);
-    content.addAndMakeVisible(genreLabel);
-    content.addAndMakeVisible(genreEditor);
     content.addAndMakeVisible(namingFormatLabel);
     content.addAndMakeVisible(namingFormatCombo);
     content.addAndMakeVisible(customPrefixLabel);
     content.addAndMakeVisible(customPrefixEditor);
     content.addAndMakeVisible(overwriteDuplicatesToggle);
-    content.addAndMakeVisible(themeLightToggle);
 
     syncFromProcessor();
     updateCustomPrefixVisibility();
@@ -192,11 +191,9 @@ void SettingsOverlayComponent::syncFromProcessor()
     autoDetectKeyToggle.setToggleState(!processor.useProjectKey, juce::dontSendNotification);
     int keyIndex = getKeyList().indexOf(processor.projectKey);
     keySelector.setSelectedItemIndex(keyIndex >= 0 ? keyIndex : 0, juce::dontSendNotification);
-    genreEditor.setText(processor.defaultGenre, juce::dontSendNotification);
     namingFormatCombo.setSelectedItemIndex(juce::jlimit(0, 2, processor.namingFormat), juce::dontSendNotification);
     customPrefixEditor.setText(processor.customPrefix, juce::dontSendNotification);
     overwriteDuplicatesToggle.setToggleState(processor.overwriteDuplicates, juce::dontSendNotification);
-    themeLightToggle.setToggleState(!processor.themeLight, juce::dontSendNotification);
     if (processor.outputDirectory.isDirectory()) {
         juce::String p = processor.outputDirectory.getFullPathName();
         if (p.length() > 60) p = p.dropLastCharacters(p.length() - 57) + "...";
@@ -211,64 +208,55 @@ void SettingsOverlayComponent::paint(juce::Graphics& g)
 {
     g.fillAll(creamBg);
     juce::Rectangle<int> headerBarRect(0, 0, getWidth(), kHeaderHeight);
-    g.setColour(FinderTheme::headerBar);
+    g.setColour(FinderTheme::topBar);
     g.fillRect(headerBarRect);
     g.setColour(textOnDark);
-    g.setFont(FinderTheme::interFont(17.0f, true));
-    g.drawText("Settings", 44, 0, getWidth() - 100, kHeaderHeight, juce::Justification::centredLeft, true);
+    g.setFont(FinderTheme::interFont(15.0f, true));
+    g.drawText("Settings", 20, 0, getWidth() - 80, kHeaderHeight, juce::Justification::centredLeft, true);
 }
 
 void SettingsOverlayComponent::resized()
 {
-    backBtn.setBounds(8, (kHeaderHeight - 28) / 2, 28, 28);
-    titleLabel.setBounds(44, 0, 200, kHeaderHeight);
+    closeBtn.setBounds(getWidth() - 44, (kHeaderHeight - 28) / 2, 28, 28);
 
-    const int pad = 24;
     const int labelW = 180;
-    const int controlW = 240;
-    const int cw = juce::jmax(getWidth(), labelW + controlW + pad * 2 + 40);
-    int y = pad;
+    const int controlW = 260;
+    const int cw = juce::jmax(getWidth(), labelW + controlW + kContentPad * 2 + 40);
+    int y = kContentPad;
 
     scrollViewport.setBounds(0, kHeaderHeight, getWidth(), getHeight() - kHeaderHeight);
-    content.setSize(cw, 680);
+    content.setSize(cw, 580);
 
-    outputFolderTitleLabel.setBounds(pad, y, labelW + controlW, kRowHeight);
-    y += kRowHeight + 4;
-    outputPathLabel.setBounds(pad, y, cw - pad * 2 - 90, kRowHeight);
-    browseOutputBtn.setBounds(cw - pad - 84, y, 80, 24);
-    y += kRowHeight + 4 + kSectionGap;
+    outputFolderTitleLabel.setBounds(kContentPad, y, labelW + controlW, kRowHeight);
+    y += kRowHeight + 6;
+    outputPathLabel.setBounds(kContentPad, y, cw - kContentPad * 2 - 94, kRowHeight);
+    browseOutputBtn.setBounds(cw - kContentPad - 84, y, 80, 26);
+    y += kRowHeight + 6 + kSectionGap;
 
-    autoDetectBpmToggle.setBounds(pad, y, cw - pad * 2, kRowHeight);
-    y += kRowHeight + 4;
-    manualBpmLabel.setBounds(pad, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
-    bpmDownBtn.setBounds(pad, y, 36, 24);
-    bpmValueLabel.setBounds(pad + 40, y, 48, 24);
-    bpmUpBtn.setBounds(pad + 92, y, 36, 24);
-    y += kRowHeight + 4 + kSectionGap;
+    autoDetectBpmToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
+    y += kRowHeight + 6;
+    manualBpmLabel.setBounds(kContentPad, y, labelW, kRowHeight);
+    y += kRowHeight + 6;
+    bpmDownBtn.setBounds(kContentPad, y, 36, 26);
+    bpmValueLabel.setBounds(kContentPad + 40, y, 48, 26);
+    bpmUpBtn.setBounds(kContentPad + 92, y, 36, 26);
+    y += kRowHeight + 6 + kSectionGap;
 
-    autoDetectKeyToggle.setBounds(pad, y, cw - pad * 2, kRowHeight);
-    y += kRowHeight + 4;
-    manualKeyLabel.setBounds(pad, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
-    keySelector.setBounds(pad, y, controlW, 24);
-    y += kRowHeight + 4 + kSectionGap;
+    autoDetectKeyToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
+    y += kRowHeight + 6;
+    manualKeyLabel.setBounds(kContentPad, y, labelW, kRowHeight);
+    y += kRowHeight + 6;
+    keySelector.setBounds(kContentPad, y, controlW, 26);
+    y += kRowHeight + 6 + kSectionGap;
 
-    genreLabel.setBounds(pad, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
-    genreEditor.setBounds(pad, y, controlW, 24);
-    y += kRowHeight + 4 + kSectionGap;
+    namingFormatLabel.setBounds(kContentPad, y, labelW, kRowHeight);
+    y += kRowHeight + 6;
+    namingFormatCombo.setBounds(kContentPad, y, controlW, 26);
+    y += kRowHeight + 6;
+    customPrefixLabel.setBounds(kContentPad, y, labelW, kRowHeight);
+    y += kRowHeight + 6;
+    customPrefixEditor.setBounds(kContentPad, y, controlW, 26);
+    y += kRowHeight + 6 + kSectionGap;
 
-    namingFormatLabel.setBounds(pad, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
-    namingFormatCombo.setBounds(pad, y, controlW, 24);
-    y += kRowHeight + 4;
-    customPrefixLabel.setBounds(pad, y, labelW, kRowHeight);
-    y += kRowHeight + 4;
-    customPrefixEditor.setBounds(pad, y, controlW, 24);
-    y += kRowHeight + 4 + kSectionGap;
-
-    overwriteDuplicatesToggle.setBounds(pad, y, cw - pad * 2, kRowHeight);
-    y += kRowHeight + 4;
-    themeLightToggle.setBounds(pad, y, cw - pad * 2, kRowHeight);
+    overwriteDuplicatesToggle.setBounds(kContentPad, y, cw - kContentPad * 2, kRowHeight);
 }

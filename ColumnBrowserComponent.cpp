@@ -2,6 +2,62 @@
 
 using namespace FinderTheme;
 
+namespace
+{
+struct RenameDialogContent : juce::Component
+{
+    RenameDialogContent(const juce::String& initialName, juce::String* resultOut_)
+        : resultOut(resultOut_)
+    {
+        label.setText("Enter new name:", juce::dontSendNotification);
+        label.setColour(juce::Label::textColourId, juce::Colours::black);
+        addAndMakeVisible(label);
+        te.setText(initialName);
+        te.setSelectAllWhenFocused(true);
+        addAndMakeVisible(te);
+        okBtn.setButtonText("OK");
+        okBtn.onClick = [this] {
+            if (resultOut) *resultOut = te.getText().trim();
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState(1);
+        };
+        addAndMakeVisible(okBtn);
+        cancelBtn.setButtonText("Cancel");
+        cancelBtn.onClick = [this] {
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState(0);
+        };
+        addAndMakeVisible(cancelBtn);
+        setSize(360, 110);
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12);
+        label.setBounds(r.removeFromTop(22));
+        r.removeFromTop(6);
+        te.setBounds(r.removeFromTop(28));
+        r.removeFromTop(14);
+        auto row = r.removeFromTop(28);
+        cancelBtn.setBounds(row.removeFromRight(80).reduced(2, 0));
+        row.removeFromRight(8);
+        okBtn.setBounds(row.removeFromRight(80).reduced(2, 0));
+    }
+    juce::String* resultOut = nullptr;
+    juce::Label label;
+    juce::TextEditor te;
+    juce::TextButton okBtn;
+    juce::TextButton cancelBtn;
+};
+}
+
+static juce::String sanitiseRename(const juce::String& s)
+{
+    juce::String t = s.trim();
+    while (t.contains("/") || t.contains("\\"))
+        t = t.replace("/", "").replace("\\", "");
+    return t;
+}
+
 juce::StringArray ColumnBrowserComponent::getDefaultCategories()
 {
     return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "FX", "Loops", "Percussion", "Vocals", "Other" };
@@ -17,7 +73,105 @@ ColumnBrowserComponent::ColumnBrowserComponent()
         if (folderIconWhite)
             folderIconWhite->replaceColour(juce::Colour(0xff393E46), juce::Colours::white);
     }
+    renameEditor.setMultiLine(false);
+    renameEditor.setBorder(juce::BorderSize<int>(1));
+    renameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
+    renameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
+    renameEditor.setColour(juce::TextEditor::highlightColourId, juce::Colour(0xffb0d4f0));
+    renameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
+    renameEditor.setColour(juce::TextEditor::outlineColourId, FinderTheme::topBar);
+    renameEditor.onReturnKey = [this] { commitRename(); };
+    renameEditor.onEscapeKey = [this] { cancelRename(); };
 }
+
+juce::Rectangle<int> ColumnBrowserComponent::getColumnBounds(int column) const
+{
+    int x = 0;
+    for (int i = 0; i < columnWidths.size() && i <= column; ++i)
+    {
+        if (i == column)
+            return juce::Rectangle<int>(x, 0, columnWidths[i], getHeight());
+        x += columnWidths[i] + kDividerWidth;
+    }
+    return {};
+}
+
+juce::Rectangle<int> ColumnBrowserComponent::getTextBoundsForCell(int column, int row) const
+{
+    const int padH = 12;
+    const int padV = 9;
+    const int fullIconWidth = 22;
+    juce::Rectangle<int> bounds = getColumnBounds(column);
+    if (bounds.isEmpty()) return {};
+    int textLeft = bounds.getX() + padH + fullIconWidth + 6;
+    juce::Rectangle<int> rowRect(bounds.getX(), row * kRowHeight, bounds.getWidth(), kRowHeight);
+    return juce::Rectangle<int>(textLeft, rowRect.getY() + padV, rowRect.getRight() - textLeft - padH, kRowHeight - 2 * padV);
+}
+
+void ColumnBrowserComponent::startInlineRename(int column, int row)
+{
+    if (column < 0 || column >= columnItems.size()) return;
+    const auto& items = columnItems.getReference(column);
+    if (row < 0 || row >= items.size()) return;
+    juce::File f = items.getReference(row);
+    hideRenameEditor();
+    editingColumn = column;
+    editingRow = row;
+    renameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
+    renameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
+    renameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
+    renameEditor.setText(f.getFileName(), false);
+    renameEditor.setBounds(getTextBoundsForCell(column, row));
+    renameEditor.onFocusLost = [this] { commitRename(); };
+    addAndMakeVisible(renameEditor);
+    renameEditor.selectAll();
+    renameEditor.grabKeyboardFocus();
+}
+
+void ColumnBrowserComponent::commitRename()
+{
+    if (editingColumn < 0 || editingRow < 0) return;
+    if (editingColumn >= columnItems.size()) { hideRenameEditor(); return; }
+    const auto& items = columnItems.getReference(editingColumn);
+    if (editingRow >= items.size()) { hideRenameEditor(); return; }
+    juce::File f = items.getReference(editingRow);
+    juce::String currentName = f.getFileName();
+    juce::String newName = sanitiseRename(renameEditor.getText());
+    hideRenameEditor();
+    if (newName.isEmpty() || newName == currentName) return;
+    juce::File dest = f.getParentDirectory().getChildFile(newName);
+    if (dest.exists()) return;
+    if (!f.moveFileTo(dest)) return;
+    if (f == rootFolder)
+        setRootFolder(dest);
+    else if (path.contains(f))
+    {
+        juce::Array<juce::File> newPath;
+        for (auto& p : path)
+            newPath.add(p == f ? dest : p);
+        setPath(newPath);
+    }
+    else
+        refreshColumns();
+    if (onPathChanged)
+        onPathChanged();
+}
+
+void ColumnBrowserComponent::cancelRename()
+{
+    hideRenameEditor();
+}
+
+void ColumnBrowserComponent::hideRenameEditor()
+{
+    if (editingColumn < 0) return;
+    renameEditor.onFocusLost = nullptr;
+    removeChildComponent(&renameEditor);
+    editingColumn = -1;
+    editingRow = -1;
+    repaint();
+}
+
 
 void ColumnBrowserComponent::setRootFolder(const juce::File& root)
 {
@@ -224,8 +378,11 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
         g.setColour(selected ? FinderTheme::textOnDark : FinderTheme::textCharcoal);
         g.setFont(FinderTheme::interFont(13.0f, selected));
         juce::Rectangle<int> textRect(textLeft, rowRect.getY() + padV, rowRect.getRight() - textLeft - padH, kRowHeight - 2 * padV);
-        juce::String name = items.getReference(row).getFileName();
-        g.drawText(name, textRect, juce::Justification::centredLeft, true);
+        if (columnIndex != editingColumn || row != editingRow)
+        {
+            juce::String name = items.getReference(row).getFileName();
+            g.drawText(name, textRect, juce::Justification::centredLeft, true);
+        }
     }
 }
 
@@ -241,7 +398,7 @@ void ColumnBrowserComponent::paint(juce::Graphics& g)
         x += w;
         if (i < columnItems.size() - 1)
         {
-            g.setColour(FinderTheme::columnDivider);
+            g.setColour(FinderTheme::topBar);
             g.fillRect(x, 0, kDividerWidth, getHeight());
             x += kDividerWidth;
         }
@@ -278,6 +435,27 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
     const auto& items = columnItems.getReference(col);
     if (row < 0 || row >= items.size())
         return;
+
+    if (e.mods.isRightButtonDown())
+    {
+        selectedRowInColumn.set(col, row);
+        repaint();
+        juce::File f = items.getReference(row);
+        juce::PopupMenu m;
+        m.addItem(1, "Rename");
+        juce::String revealLabel = juce::SystemStats::getOperatingSystemType() == juce::SystemStats::MacOSX
+            ? "Reveal in Finder" : "Reveal in File Explorer";
+        m.addItem(2, revealLabel);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withParentComponent(getTopLevelComponent()),
+            [this, col, row, f](int result) {
+                if (result == 1)
+                    startInlineRename(col, row);
+                else if (result == 2 && f.exists())
+                    f.revealToUser();
+            });
+        return;
+    }
+
     selectedRowInColumn.set(col, row);
     repaint();
     juce::File f = items.getReference(row);
@@ -291,6 +469,18 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         if (col == columnItems.size() - 1 && onFileSelected)
             onFileSelected(row);
     }
+}
+
+void ColumnBrowserComponent::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    int col = getColumnAtX(e.getPosition().getX());
+    if (col < 0 || col >= columnItems.size())
+        return;
+    int row = e.getPosition().getY() / kRowHeight;
+    const auto& items = columnItems.getReference(col);
+    if (row < 0 || row >= items.size())
+        return;
+    startInlineRename(col, row);
 }
 
 void ColumnBrowserComponent::mouseDrag(const juce::MouseEvent& e)

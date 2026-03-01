@@ -47,6 +47,7 @@ namespace
             addAndMakeVisible(cancelBtn);
             setSize(380, 120);
         }
+        void setRenameLabel(const juce::String& s) { label.setText(s, juce::dontSendNotification); }
         void resized() override
         {
             auto r = getLocalBounds().reduced(12);
@@ -132,9 +133,14 @@ void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graph
         editor.forwardArrowDimmedDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
 }
 
-void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
+void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent& e)
 {
     if (row < 0 || row >= editor.packNames.size()) return;
+    if (e.getNumberOfClicks() >= 2)
+    {
+        editor.startPackInlineRename(row);
+        return;
+    }
     editor.selectedPackIndex = row;
     editor.columnPath.clear();
     editor.pathHistory.clear();
@@ -224,6 +230,16 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     packList.setOutlineThickness(0);
     addAndMakeVisible(packList);
 
+    packRenameEditor.setMultiLine(false);
+    packRenameEditor.setBorder(juce::BorderSize<int>(1));
+    packRenameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
+    packRenameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
+    packRenameEditor.setColour(juce::TextEditor::highlightColourId, juce::Colour(0xffb0d4f0));
+    packRenameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
+    packRenameEditor.setColour(juce::TextEditor::outlineColourId, FinderTheme::topBar);
+    packRenameEditor.onReturnKey = [this] { commitPackRename(); };
+    packRenameEditor.onEscapeKey = [this] { hidePackRenameEditor(); };
+
     sidebarPlaceholderBtn.setButtonText("");
     sidebarPlaceholderBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
     sidebarPlaceholderBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
@@ -274,6 +290,10 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     };
     columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
     columnBrowser.onKeyLeft = [this] { goBack(); };
+    columnBrowser.onPathChanged = [this] {
+        columnPath = columnBrowser.getPath();
+        updateBreadcrumb();
+    };
     addAndMakeVisible(columnBrowser);
 
     columnPlaceholderLabel.setText("", juce::dontSendNotification);
@@ -379,10 +399,10 @@ void SampleOrganizerEditor::paint(juce::Graphics& g)
     g.setColour(FinderTheme::topBar);
     g.fillRect(headerBarRect);
     // Vertical divider between left bar and content (stops at content bottom)
-    g.setColour(dividerLine.withAlpha(0.5f));
+    g.setColour(FinderTheme::topBar);
     g.fillRect(kSidebarWidth, 0, 1, contentBottom);
     // Thick horizontal border under content (above drag strip)
-    g.setColour(dividerLine);
+    g.setColour(FinderTheme::topBar);
     g.fillRect(0, contentBottom, getWidth(), kThickBorderHeight);
     // Breadcrumb in header (drawn over dark area) — always draw from breadcrumbParts when non-empty
     juce::Rectangle<int> header = getHeaderBounds();
@@ -445,7 +465,7 @@ void SampleOrganizerEditor::paint(juce::Graphics& g)
     g.setColour(processBtnBg);
     g.fillRect(btnBounds);
     // Thick bottom border under Process Samples
-    g.setColour(dividerLine);
+    g.setColour(FinderTheme::topBar);
     g.fillRect(0, getHeight() - kThickBorderHeight, getWidth(), kThickBorderHeight);
 }
 
@@ -592,6 +612,78 @@ void SampleOrganizerEditor::PackListHoverListener::mouseExit(const juce::MouseEv
     if (editor && e.eventComponent == &editor->packList)
         editor->setHoveredPackRow(-1);
 }
+
+void SampleOrganizerEditor::PackListHoverListener::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (!editor || e.eventComponent != &editor->packList) return;
+    int row = editor->packList.getRowContainingPosition(e.getPosition().getX(), e.getPosition().getY());
+    if (row >= 0)
+        editor->tryRenamePack(row);
+}
+
+void SampleOrganizerEditor::tryRenamePack(int row)
+{
+    startPackInlineRename(row);
+}
+
+void SampleOrganizerEditor::startPackInlineRename(int row)
+{
+    if (row < 0 || row >= packDirs.size()) return;
+    hidePackRenameEditor();
+    editingPackRow = row;
+    packRenameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
+    packRenameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
+    packRenameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
+    juce::Rectangle<int> listBounds = packList.getBounds();
+    juce::Rectangle<int> rowRect(listBounds.getX(), listBounds.getY() + row * kPackRowHeight, listBounds.getWidth(), kPackRowHeight);
+    juce::Rectangle<int> textRect = rowRect.withTrimmedLeft(kPackPaddingH).withTrimmedRight(32).reduced(0, kPackPaddingV);
+    packRenameEditor.setText(packNames[row], false);
+    packRenameEditor.setBounds(textRect);
+    packRenameEditor.onFocusLost = [this] { commitPackRename(); };
+    addAndMakeVisible(packRenameEditor);
+    packRenameEditor.toFront(true);
+    packRenameEditor.selectAll();
+    packRenameEditor.grabKeyboardFocus();
+}
+
+void SampleOrganizerEditor::commitPackRename()
+{
+    if (editingPackRow < 0 || editingPackRow >= packDirs.size()) { hidePackRenameEditor(); return; }
+    juce::File packDir = packDirs[editingPackRow];
+    juce::String newName = juce::File::createLegalFileName(packRenameEditor.getText().trim());
+    hidePackRenameEditor();
+    juce::String currentName = packDir.getFileName();
+    if (newName.isEmpty() || newName == currentName) return;
+    juce::File dest = processor.outputDirectory.getChildFile(newName);
+    if (dest.exists()) return;
+    if (!packDir.moveFileTo(dest)) return;
+    refreshPackList();
+    for (int i = 0; i < packDirs.size(); ++i)
+    {
+        if (packDirs[i] == dest)
+        {
+            selectedPackIndex = i;
+            columnBrowser.setRootFolder(packDirs[selectedPackIndex]);
+            columnPath.clear();
+            pathHistory.clear();
+            pathForward.clear();
+            columnBrowser.setPath(columnPath);
+            updateBreadcrumb();
+            break;
+        }
+    }
+    packList.repaint();
+}
+
+void SampleOrganizerEditor::hidePackRenameEditor()
+{
+    if (editingPackRow < 0) return;
+    packRenameEditor.onFocusLost = nullptr;
+    removeChildComponent(&packRenameEditor);
+    editingPackRow = -1;
+    packList.repaint();
+}
+
 
 void SampleOrganizerEditor::setHoveredPackRow(int row)
 {
