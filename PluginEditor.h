@@ -28,8 +28,11 @@ private:
     static constexpr int kLogoPanelWidth = 220;
     static constexpr int kSidebarWidth = 220;
     static constexpr int kHeaderHeight = 52;
-    static constexpr int kDragAreaHeight = 100;
+    static constexpr int kDragAreaHeight = 72;
+    static constexpr int kDragAreaPadding = 16;       // horizontal margin around drag area
+    static constexpr int kDragAreaPaddingVertical = 10;  // 10px above and below drag samples box
     static constexpr int kProcessButtonHeight = 52;
+    static constexpr int kThickBorderHeight = 2;     // thick horizontal borders
 
     // Sidebar
     std::unique_ptr<juce::Drawable> logoDrawable;
@@ -66,7 +69,7 @@ private:
     juce::DrawableButton forwardBtn { "Forward", juce::DrawableButton::ImageFitted };
     juce::Label breadcrumbLabel;
     juce::StringArray breadcrumbParts;
-    juce::TextButton settingsBtn { "Settings" };
+    juce::DrawableButton settingsBtn { "Settings", juce::DrawableButton::ImageFitted };
     juce::Array<juce::Array<juce::File>> pathHistory;
     juce::Array<juce::Array<juce::File>> pathForward;
 
@@ -81,6 +84,7 @@ private:
     juce::Label queueLabel;
     juce::TextButton processBtn;
     bool isDragOver = false;
+    bool isHoveringDragArea = false;
 
     // Settings overlay (initialized in cpp with processor ref)
     std::unique_ptr<SettingsOverlayComponent> settingsOverlay;
@@ -97,6 +101,7 @@ private:
     void updateBreadcrumb();
     void mouseMove(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
+    void mouseEnter(const juce::MouseEvent& e) override;
     void mouseDown(const juce::MouseEvent&) override;
     void setHoveredPackRow(int row);
     void handleBreadcrumbClick(int x, int y);
@@ -113,6 +118,7 @@ private:
     void goBack();
     void goForward();
     void playSelectedFile();
+    int getContentBottom() const;
     juce::Rectangle<int> getLogoPanelBounds() const;
     juce::Rectangle<int> getPackListBounds() const;
     juce::Rectangle<int> getHeaderBounds() const;

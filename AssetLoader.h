@@ -29,4 +29,22 @@ struct AssetLoader
     {
         return juce::Drawable::createFromImageData(BinaryData::GearSettingsIcon_svg, BinaryData::GearSettingsIcon_svgSize);
     }
+
+    static std::unique_ptr<juce::Drawable> getFolderDarkGreyIcon()
+    {
+        return juce::Drawable::createFromImageData(BinaryData::FolderDarkGrey_Icon_svg, BinaryData::FolderDarkGrey_Icon_svgSize);
+    }
+
+    /** Gear icon from the PNG asset (use for settings button). */
+    static std::unique_ptr<juce::Drawable> getGearSettingsIconPng()
+    {
+        juce::MemoryInputStream mis(BinaryData::GearSettingsIcon_png, BinaryData::GearSettingsIcon_pngSize, false);
+        juce::PNGImageFormat fmt;
+        juce::Image img = fmt.decodeImage(mis);
+        if (!img.isValid())
+            return getGearSettingsIcon();
+        auto drawable = std::make_unique<juce::DrawableImage>();
+        drawable->setImage(img);
+        return std::unique_ptr<juce::Drawable>(drawable.release());
+    }
 };

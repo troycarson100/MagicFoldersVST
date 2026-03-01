@@ -40,13 +40,13 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     addAndMakeVisible(backBtn);
 
     titleLabel.setText("Settings", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(16.0f, juce::Font::bold));
     titleLabel.setColour(juce::Label::textColourId, textOnDark);
-    addAndMakeVisible(titleLabel);
+    titleLabel.setVisible(false);
+    addChildComponent(titleLabel);
 
     outputFolderTitleLabel.setText("Output Folder", juce::dontSendNotification);
     outputFolderTitleLabel.setColour(juce::Label::textColourId, textCharcoal);
-    outputFolderTitleLabel.setFont(juce::Font(12.0f, juce::Font::bold));
+    outputFolderTitleLabel.setFont(FinderTheme::interFont(13.0f, true));
     addAndMakeVisible(outputFolderTitleLabel);
     outputPathLabel.setColour(juce::Label::textColourId, textCharcoal);
     outputPathLabel.setText("(not set)", juce::dontSendNotification);
@@ -214,8 +214,8 @@ void SettingsOverlayComponent::paint(juce::Graphics& g)
     g.setColour(FinderTheme::headerBar);
     g.fillRect(headerBarRect);
     g.setColour(textOnDark);
-    g.setFont(juce::Font(16.0f, juce::Font::bold));
-    g.drawText("Settings", 52, 0, getWidth() - 100, kHeaderHeight, juce::Justification::centredLeft, true);
+    g.setFont(FinderTheme::interFont(17.0f, true));
+    g.drawText("Settings", 44, 0, getWidth() - 100, kHeaderHeight, juce::Justification::centredLeft, true);
 }
 
 void SettingsOverlayComponent::resized()

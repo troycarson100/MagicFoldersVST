@@ -30,6 +30,29 @@ void SampleOrganizerProcessor::setOutputDirectory(const juce::File& dir)
     outputDirectory = dir;
 }
 
+void SampleOrganizerProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    juce::MemoryOutputStream os(destData, true);
+    if (outputDirectory.isDirectory() || outputDirectory.exists())
+        os.writeString(outputDirectory.getFullPathName());
+    else
+        os.writeString({});
+}
+
+void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+    juce::MemoryInputStream is(data, static_cast<size_t>(sizeInBytes), false);
+    juce::String path = is.readString();
+    if (path.isNotEmpty())
+    {
+        juce::File dir(path);
+        if (dir.exists())
+            outputDirectory = dir;
+    }
+}
+
 void SampleOrganizerProcessor::addFiles(const juce::Array<juce::File>& files)
 {
     for (auto& f : files)

@@ -3,16 +3,22 @@
 
 namespace FinderTheme
 {
+    inline juce::Font interFont(float size, bool bold = false)
+    {
+        return juce::Font("Inter", size, bold ? juce::Font::bold : juce::Font::plain);
+    }
+
     // Cream / light redesign (Figma)
     const juce::Colour creamBg           { 0xffF0EDE8 };  // main content, drop zone
     const juce::Colour textCharcoal      { 0xff1a1a1a };  // all text
-    const juce::Colour headerBar         { 0xff1e1e1e };  // top header, logo panel, selected file in column 3
+    const juce::Colour headerBar         { 0xff1e1e1e };  // logo panel, selected file in column 3
+    const juce::Colour topBar            { 0xff393E46 };  // top bar with breadcrumbs and settings icon
     const juce::Colour processBtnBg      { 0xff1a1a1a };  // Process Samples button
     const juce::Colour processBtnHover   { 0xff2a2a2a };
     const juce::Colour sidebarDarker     { 0xffE8E4DE };  // (unused when sidebar is dark bar)
     const juce::Colour sidebarDarkBar    { 0xff1e1e1e };  // full-height left bar (same as header)
     const juce::Colour sidebarRowHover   { 0xff2a2a2a };  // pack list row hover on dark bar
-    const juce::Colour sidebarRowSelected { 0xff2a2a2a }; // pack list selected row on dark bar
+    const juce::Colour sidebarRowSelected { 0xff353535 }; // pack list selected row (lighter than bar so it stands out)
     const juce::Colour sidebarHover      { 0xffe0ddd6 };  // (light theme hover)
     const juce::Colour columnDivider     { 0xffC8C4BE };  // 1px solid column dividers
     const juce::Colour dividerLine       { columnDivider };

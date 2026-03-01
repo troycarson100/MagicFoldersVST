@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "FinderTheme.h"
+#include "AssetLoader.h"
 
 /** Finder-style column browser: N columns of folders/files, resizable dividers. */
 class ColumnBrowserComponent : public juce::Component
@@ -12,6 +13,7 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
     void setRootFolder(const juce::File& root);
     void setPath(const juce::Array<juce::File>& path);
@@ -21,6 +23,7 @@ public:
 
     std::function<void(int column, int row)> onFolderSelected;
     std::function<void(int row)> onFileSelected;
+    std::function<void()> onKeyLeft;  // back (e.g. when user presses Left)
 
     static constexpr int kMinColumnWidth = 80;
     static constexpr int kDividerWidth = 1;
@@ -37,6 +40,8 @@ private:
     juce::Array<int> columnWidths;
     int draggingDivider = -1;
     int lastDividerX = 0;
+    std::unique_ptr<juce::Drawable> folderIcon;
+    std::unique_ptr<juce::Drawable> folderIconWhite;
 
     void refreshColumns();
     int getColumnAtX(int x) const;

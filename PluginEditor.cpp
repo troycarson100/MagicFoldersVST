@@ -14,6 +14,59 @@ namespace
         }
     };
     ProcessButtonLAF s_processButtonLAF;
+
+    class RenamePackDialogContent : public juce::Component
+    {
+    public:
+        RenamePackDialogContent(const juce::String& defaultName_, juce::String* resultOut_)
+            : defaultName(defaultName_), resultOut(resultOut_)
+        {
+            label.setText("Enter a name for the new sample pack:", juce::dontSendNotification);
+            label.setColour(juce::Label::textColourId, juce::Colours::black);
+            addAndMakeVisible(label);
+            te.setText(defaultName);
+            te.setSelectAllWhenFocused(true);
+            addAndMakeVisible(te);
+            okBtn.setButtonText("OK");
+            okBtn.onClick = [this] {
+                if (resultOut)
+                {
+                    *resultOut = te.getText().trim();
+                    if (resultOut->isEmpty())
+                        *resultOut = defaultName;
+                }
+                if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                    dw->exitModalState(1);
+            };
+            addAndMakeVisible(okBtn);
+            cancelBtn.setButtonText("Cancel");
+            cancelBtn.onClick = [this] {
+                if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                    dw->exitModalState(0);
+            };
+            addAndMakeVisible(cancelBtn);
+            setSize(380, 120);
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced(12);
+            label.setBounds(r.removeFromTop(22));
+            r.removeFromTop(6);
+            te.setBounds(r.removeFromTop(28));
+            r.removeFromTop(14);
+            auto row = r.removeFromTop(28);
+            cancelBtn.setBounds(row.removeFromRight(80).reduced(2, 0));
+            row.removeFromRight(8);
+            okBtn.setBounds(row.removeFromRight(80).reduced(2, 0));
+        }
+    private:
+        juce::String defaultName;
+        juce::String* resultOut = nullptr;
+        juce::Label label;
+        juce::TextEditor te;
+        juce::TextButton okBtn;
+        juce::TextButton cancelBtn;
+    };
 }
 
 static juce::StringArray expandDroppedPaths(const juce::StringArray& list)
@@ -68,15 +121,15 @@ void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graph
     else if (row == editor.hoveredPackRow)
         g.fillAll(FinderTheme::sidebarRowHover);
     g.setColour(FinderTheme::textOnDark);
-    g.setFont(selected ? juce::Font(11.0f, juce::Font::bold) : juce::Font(11.0f, juce::Font::plain));
+    g.setFont(interFont(13.0f, selected));
     juce::String name = row < editor.packNames.size() ? editor.packNames[row] : juce::String();
     if (name.length() > 28)
         name = name.dropLastCharacters(name.length() - 25) + "...";
     const int padH = editor.kPackPaddingH;
     const int padV = editor.kPackPaddingV;
     g.drawText(name, padH, padV, w - padH - 32, h - 2 * padV, juce::Justification::centredLeft);
-    if (selected && editor.arrowRightDrawable)
-        editor.arrowRightDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
+    if (selected && editor.forwardArrowDimmedDrawable)
+        editor.forwardArrowDimmedDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
 }
 
 void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
@@ -116,26 +169,48 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     plusBtn.onClick = [this] {
         if (!processor.outputDirectory.isDirectory())
         {
-            if (settingsOverlay->isVisible())
-                settingsOverlay->setVisible(false);
+            settingsOverlay->syncFromProcessor();
+            settingsOverlay->setVisible(true);
+            settingsOverlay->toFront(true);
             return;
         }
         refreshPackList();
-        juce::String name = "New Pack " + juce::String(packDirs.size() + 1);
-        juce::File newDir = processor.outputDirectory.getChildFile(name);
-        if (newDir.createDirectory())
-        {
-            refreshPackList();
-            for (int i = 0; i < packDirs.size(); ++i)
+        juce::String defaultName = "New Pack " + juce::String(packDirs.size() + 1);
+        juce::File newDir = processor.outputDirectory.getChildFile(defaultName);
+        if (!newDir.createDirectory())
+            return;
+        juce::String resultName;
+        RenamePackDialogContent content(defaultName, &resultName);
+        juce::DialogWindow dw("Name sample pack", juce::Colours::white, true);
+        dw.setContentNonOwned(&content, true);
+        dw.setSize(content.getWidth(), content.getHeight());
+        dw.setResizable(false, false);
+        juce::File folderToSelect = newDir;
+        dw.enterModalState(true, juce::ModalCallbackFunction::create([this, &resultName, &folderToSelect, newDir](int result) {
+            if (result == 1 && resultName.isNotEmpty())
             {
-                if (packDirs[i] == newDir) { selectedPackIndex = i; break; }
+                juce::File targetDir = processor.outputDirectory.getChildFile(resultName);
+                if (targetDir != newDir && !targetDir.exists() && newDir.moveFileTo(targetDir))
+                    folderToSelect = targetDir;
             }
-            columnPath.clear();
-            columnBrowser.setRootFolder(newDir);
-            columnBrowser.setPath(columnPath);
+            else
+            {
+                newDir.deleteRecursively();
+            }
+            refreshPackList();
+            if (folderToSelect.exists())
+            {
+                for (int i = 0; i < packDirs.size(); ++i)
+                {
+                    if (packDirs[i] == folderToSelect) { selectedPackIndex = i; break; }
+                }
+                columnPath.clear();
+                columnBrowser.setRootFolder(folderToSelect);
+                columnBrowser.setPath(columnPath);
+            }
             updateBreadcrumb();
             packList.repaint();
-        }
+        }));
     };
     addAndMakeVisible(plusBtn);
 
@@ -149,7 +224,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     packList.setOutlineThickness(0);
     addAndMakeVisible(packList);
 
-    sidebarPlaceholderBtn.setButtonText("Set destination folder in\nSettings (gear icon) " + juce::String::fromUTF8("\xe2\x86\x92"));
+    sidebarPlaceholderBtn.setButtonText("");
     sidebarPlaceholderBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
     sidebarPlaceholderBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
     sidebarPlaceholderBtn.onClick = [this] { settingsOverlay->syncFromProcessor(); settingsOverlay->setVisible(true); settingsOverlay->toFront(true); };
@@ -159,7 +234,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     backArrowDrawable = AssetLoader::getWhiteArrowLeft();
     forwardArrowDrawable = AssetLoader::getWhiteArrowRight();
     forwardArrowDimmedDrawable = AssetLoader::getDarkGreyArrowRight();
-    gearDrawable = AssetLoader::getGearSettingsIcon();
+    gearDrawable = AssetLoader::getGearSettingsIconPng();
     backBtn.setImages(backArrowDrawable.get());
     backBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
     backBtn.onClick = [this] { goBack(); };
@@ -170,13 +245,13 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     forwardBtn.setEnabled(true);
     addAndMakeVisible(forwardBtn);
     breadcrumbLabel.setColour(juce::Label::textColourId, textOnDark);
-    breadcrumbLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
+    breadcrumbLabel.setFont(interFont(14.0f));
     breadcrumbLabel.setText("Set destination in Settings " + juce::String::fromUTF8("\xe2\x86\x92"), juce::dontSendNotification);
     breadcrumbLabel.setInterceptsMouseClicks(false, false);
     addAndMakeVisible(breadcrumbLabel);
-    settingsBtn.setButtonText(juce::CharPointer_UTF8("\xe2\x9a\x99"));  // Unicode gear U+2699
-    settingsBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    settingsBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
+    settingsBtn.setImages(gearDrawable.get());
+    settingsBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    settingsBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
     settingsBtn.onClick = [this] {
         settingsOverlay->syncFromProcessor();
         settingsOverlay->setVisible(true);
@@ -198,25 +273,27 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
         updateForwardButtonState();
     };
     columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
+    columnBrowser.onKeyLeft = [this] { goBack(); };
     addAndMakeVisible(columnBrowser);
 
-    columnPlaceholderLabel.setText("Select a pack from the list", juce::dontSendNotification);
+    columnPlaceholderLabel.setText("", juce::dontSendNotification);
     columnPlaceholderLabel.setColour(juce::Label::textColourId, textCharcoal);
-    columnPlaceholderLabel.setFont(juce::Font(juce::FontOptions(14.0f)));
+    columnPlaceholderLabel.setFont(interFont(14.0f));
     columnPlaceholderLabel.setJustificationType(juce::Justification::centred);
     columnPlaceholderLabel.setInterceptsMouseClicks(false, false);
     addAndMakeVisible(columnPlaceholderLabel);
 
-    // Drag area
+    // Drag area (mouse listener for hover)
     dragArea.setInterceptsMouseClicks(false, false);
+    dragArea.addMouseListener(this, false);
     addAndMakeVisible(dragArea);
     dragLabel.setText("Drag Sample", juce::dontSendNotification);
     dragLabel.setColour(juce::Label::textColourId, textCharcoal);
-    dragLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+    dragLabel.setFont(interFont(15.0f, true));
     dragLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(dragLabel);
     queueLabel.setColour(juce::Label::textColourId, textCharcoal);
-    queueLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    queueLabel.setFont(interFont(13.0f));
     addAndMakeVisible(queueLabel);
 
     processBtn.setButtonText("Process Samples");
@@ -287,55 +364,64 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
 void SampleOrganizerEditor::paint(juce::Graphics& g)
 {
     g.fillAll(creamBg);
-    // Full-height dark bar on the left (220px) — black bar on the left
-    juce::Rectangle<int> leftBar(0, 0, kSidebarWidth, getHeight());
+    int contentBottom = getContentBottom();
+    // Left dark bar (sidebar) — ends at content bottom to line up with column dividers on the right
+    juce::Rectangle<int> leftBar(0, 0, kSidebarWidth, contentBottom);
     g.setColour(FinderTheme::sidebarDarkBar);
     g.fillRect(leftBar);
-    // Logo in top of left bar
+    // Logo icon in top of left bar (replaces MAGIC FOLDERS text)
     juce::Rectangle<int> logoPanel = getLogoPanelBounds();
-    juce::Rectangle<int> logoArea = logoPanel.reduced(12);
-    g.setColour(textOnDark);
-    g.setFont(juce::Font(10.5f, juce::Font::plain));
-    g.drawText("MAGIC", logoArea.getX(), logoArea.getY(), logoArea.getWidth(), 18, juce::Justification::centredLeft, true);
-    g.setFont(juce::Font(15.0f, juce::Font::plain));
-    g.drawText("FOLDERS", logoArea.getX(), logoArea.getY() + 16, logoArea.getWidth(), 22, juce::Justification::centredLeft, true);
-    // Top header bar (right of left bar): dark, for breadcrumb and gear
+    juce::Rectangle<int> logoArea = logoPanel.reduced(12, 8);
+    if (logoDrawable)
+        logoDrawable->drawWithin(g, logoArea.toFloat(), juce::RectanglePlacement(juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid), 1.0f);
+    // Top bar (breadcrumbs + gear): #393E46
     juce::Rectangle<int> headerBarRect(kSidebarWidth, 0, getWidth() - kSidebarWidth, kHeaderHeight);
-    g.setColour(FinderTheme::headerBar);
+    g.setColour(FinderTheme::topBar);
     g.fillRect(headerBarRect);
-    // Vertical divider between left bar and content
+    // Vertical divider between left bar and content (stops at content bottom)
     g.setColour(dividerLine.withAlpha(0.5f));
-    g.fillRect(kSidebarWidth, 0, 1, getHeight());
-    // Breadcrumb in header (drawn over dark area)
+    g.fillRect(kSidebarWidth, 0, 1, contentBottom);
+    // Thick horizontal border under content (above drag strip)
+    g.setColour(dividerLine);
+    g.fillRect(0, contentBottom, getWidth(), kThickBorderHeight);
+    // Breadcrumb in header (drawn over dark area) — always draw from breadcrumbParts when non-empty
     juce::Rectangle<int> header = getHeaderBounds();
-    if (breadcrumbParts.size() > 1)
+    if (!breadcrumbParts.isEmpty())
     {
         juce::Rectangle<int> bcBounds = header.withTrimmedLeft(78).withTrimmedRight(120);
         int x = bcBounds.getX();
         int y = bcBounds.getY();
         int h = bcBounds.getHeight();
         g.setColour(textOnDark);
-        g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.setFont(interFont(14.0f, true));
         g.drawText(breadcrumbParts[0], x, y, 400, h, juce::Justification::centredLeft, true);
-        x += g.getCurrentFont().getStringWidth(breadcrumbParts[0]);
-        g.setFont(juce::Font(12.0f, juce::Font::plain));
+        x += (int)g.getCurrentFont().getStringWidth(breadcrumbParts[0]);
+        g.setFont(interFont(14.0f));
         for (int i = 1; i < breadcrumbParts.size(); ++i)
         {
             juce::String seg = " / " + breadcrumbParts[i];
-            g.setColour(textOnDark.withAlpha(0.85f));
+            g.setColour(textOnDark.withAlpha(0.9f));
             g.drawText(seg, x, y, 400, h, juce::Justification::centredLeft, true);
-            x += g.getCurrentFont().getStringWidth(seg);
+            x += (int)g.getCurrentFont().getStringWidth(seg);
         }
     }
-    // Drag zone: full width, cream, dashed border
+    // Drag zone: hover colour when hovering, solid border when dragging or when queue has items
     juce::Rectangle<int> dragBounds = getDragAreaBounds();
     if (isDragOver)
-        g.setColour(creamBg.darker(0.05f));
+        g.setColour(creamBg.darker(0.06f));
+    else if (isHoveringDragArea)
+        g.setColour(creamBg.darker(0.03f));
     else
         g.setColour(creamBg);
     g.fillRect(dragBounds);
     juce::Colour borderCol = textCharcoal;
-    if (processor.queue.isEmpty() && !isDragOver)
+    bool useSolidBorder = isDragOver || !processor.queue.isEmpty();
+    if (useSolidBorder)
+    {
+        g.setColour(borderCol);
+        g.drawRect(dragBounds, 1);
+    }
+    else
     {
         float dash[] = { 4.0f, 4.0f };
         g.setColour(borderCol);
@@ -344,15 +430,23 @@ void SampleOrganizerEditor::paint(juce::Graphics& g)
         g.drawDashedLine(juce::Line<float>((float)dragBounds.getRight(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getBottom()), dash, 2, 1.0f);
         g.drawDashedLine(juce::Line<float>((float)dragBounds.getX(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getY()), dash, 2, 1.0f);
     }
-    else
+    if (!processor.queue.isEmpty())
     {
-        g.setColour(borderCol);
-        g.drawRect(dragBounds, 1);
+        g.setColour(textCharcoal);
+        g.setFont(interFont(12.0f));
+        juce::Rectangle<int> textArea = dragBounds.reduced(12, 8);
+        juce::StringArray names;
+        for (const auto& info : processor.queue)
+            names.add(info.sourceFile.getFileName());
+        g.drawFittedText(names.joinIntoString("\n"), textArea, juce::Justification::topLeft, juce::jmin(8, names.size()), 1.0f);
     }
     // Process Samples button: full width dark
     juce::Rectangle<int> btnBounds = getProcessButtonBounds();
     g.setColour(processBtnBg);
     g.fillRect(btnBounds);
+    // Thick bottom border under Process Samples
+    g.setColour(dividerLine);
+    g.fillRect(0, getHeight() - kThickBorderHeight, getWidth(), kThickBorderHeight);
 }
 
 void SampleOrganizerEditor::resized()
@@ -361,13 +455,11 @@ void SampleOrganizerEditor::resized()
     int h = getHeight();
 
     juce::Rectangle<int> logoPanel = getLogoPanelBounds();
-    plusBtn.setBounds(logoPanel.getRight() - 40, logoPanel.getY() + (logoPanel.getHeight() - 32) / 2, 32, 32);
+    plusBtn.setBounds(logoPanel.getRight() - 40, 0, 32, 32);
     juce::Rectangle<int> packListArea = getPackListBounds();
     packList.setBounds(packListArea);
-    bool hasDestination = processor.outputDirectory.isDirectory();
-    sidebarPlaceholderBtn.setVisible(!hasDestination);
-    sidebarPlaceholderBtn.setBounds(packListArea.reduced(12));
-    packList.setVisible(hasDestination);
+    sidebarPlaceholderBtn.setVisible(false);
+    packList.setVisible(true);
 
     juce::Rectangle<int> header = getHeaderBounds();
     backBtn.setBounds(header.getX() + 8, header.getY() + (header.getHeight() - 28) / 2, 28, 28);
@@ -379,12 +471,13 @@ void SampleOrganizerEditor::resized()
     juce::Rectangle<int> colBounds = getColumnBrowserBounds();
     columnBrowser.setBounds(colBounds);
     bool hasPackSelected = selectedPackIndex >= 0 && selectedPackIndex < packDirs.size();
-    columnPlaceholderLabel.setVisible(!hasPackSelected);
+    columnPlaceholderLabel.setVisible(false);
     columnPlaceholderLabel.setBounds(colBounds);
     juce::Rectangle<int> dragBounds = getDragAreaBounds();
     dragArea.setBounds(dragBounds);
-    dragLabel.setBounds(dragBounds);
-    queueLabel.setBounds(dragBounds.reduced(12, 8));
+    juce::Rectangle<int> dragInner = dragBounds.reduced(16, 10);
+    dragLabel.setBounds(dragInner);
+    queueLabel.setBounds(dragInner);
     if (!processor.queue.isEmpty())
     {
         dragLabel.setVisible(false);
@@ -452,13 +545,10 @@ void SampleOrganizerEditor::updateBreadcrumb()
     juce::File selFile = columnBrowser.getSelectedFileInLastColumn();
     if (selFile.existsAsFile())
         breadcrumbParts.add(selFile.getFileName());
-    if (breadcrumbParts.size() == 1)
-    {
-        breadcrumbLabel.setText(breadcrumbParts[0], juce::dontSendNotification);
+    if (breadcrumbParts.size() >= 1)
+        breadcrumbLabel.setVisible(false);
+    else
         breadcrumbLabel.setVisible(true);
-        return;
-    }
-    breadcrumbLabel.setVisible(false);
 }
 
 void SampleOrganizerEditor::pushPathToHistory()
@@ -512,12 +602,32 @@ void SampleOrganizerEditor::setHoveredPackRow(int row)
     }
 }
 
-void SampleOrganizerEditor::mouseMove(const juce::MouseEvent&)
+void SampleOrganizerEditor::mouseMove(const juce::MouseEvent& e)
 {
+    bool inside = getDragAreaBounds().contains(e.getPosition());
+    if (inside != isHoveringDragArea)
+    {
+        isHoveringDragArea = inside;
+        repaint();
+    }
+}
+
+void SampleOrganizerEditor::mouseEnter(const juce::MouseEvent& e)
+{
+    if (e.eventComponent == &dragArea && !isHoveringDragArea)
+    {
+        isHoveringDragArea = true;
+        repaint();
+    }
 }
 
 void SampleOrganizerEditor::mouseExit(const juce::MouseEvent&)
 {
+    if (isHoveringDragArea)
+    {
+        isHoveringDragArea = false;
+        repaint();
+    }
 }
 
 void SampleOrganizerEditor::mouseDown(const juce::MouseEvent& e)
@@ -536,8 +646,8 @@ void SampleOrganizerEditor::handleBreadcrumbClick(int x, int y)
         return;
     int seg = 0;
     int px = bcLeft;
-    juce::Font boldFont(12.0f, juce::Font::bold);
-    juce::Font plainFont(12.0f, juce::Font::plain);
+    juce::Font boldFont = interFont(14.0f, true);
+    juce::Font plainFont = interFont(14.0f);
     for (int i = 0; i < breadcrumbParts.size(); ++i)
     {
         juce::String part = breadcrumbParts[i];
@@ -598,9 +708,14 @@ juce::Rectangle<int> SampleOrganizerEditor::getLogoPanelBounds() const
     return juce::Rectangle<int>(0, 0, kLogoPanelWidth, kHeaderHeight);
 }
 
+int SampleOrganizerEditor::getContentBottom() const
+{
+    return getHeight() - kDragAreaHeight - kProcessButtonHeight - 2 * kDragAreaPaddingVertical;
+}
+
 juce::Rectangle<int> SampleOrganizerEditor::getPackListBounds() const
 {
-    int contentBottom = getHeight() - kDragAreaHeight - kProcessButtonHeight;
+    int contentBottom = getContentBottom();
     return juce::Rectangle<int>(0, kHeaderHeight, kSidebarWidth, contentBottom - kHeaderHeight);
 }
 
@@ -612,19 +727,22 @@ juce::Rectangle<int> SampleOrganizerEditor::getHeaderBounds() const
 juce::Rectangle<int> SampleOrganizerEditor::getColumnBrowserBounds() const
 {
     int contentTop = kHeaderHeight;
-    int contentBottom = getHeight() - kDragAreaHeight - kProcessButtonHeight;
+    int contentBottom = getContentBottom();
     return juce::Rectangle<int>(kSidebarWidth, contentTop, getWidth() - kSidebarWidth, contentBottom - contentTop);
 }
 
 juce::Rectangle<int> SampleOrganizerEditor::getDragAreaBounds() const
 {
-    int y = getHeight() - kDragAreaHeight - kProcessButtonHeight;
-    return juce::Rectangle<int>(0, y, getWidth(), kDragAreaHeight);
+    int contentBottom = getContentBottom();
+    int y = contentBottom + kDragAreaPaddingVertical;
+    return juce::Rectangle<int>(kDragAreaPadding, y, getWidth() - 2 * kDragAreaPadding, kDragAreaHeight);
 }
 
 juce::Rectangle<int> SampleOrganizerEditor::getProcessButtonBounds() const
 {
-    return juce::Rectangle<int>(0, getHeight() - kProcessButtonHeight, getWidth(), kProcessButtonHeight);
+    int contentBottom = getContentBottom();
+    int y = contentBottom + kDragAreaPaddingVertical + kDragAreaHeight + kDragAreaPaddingVertical;
+    return juce::Rectangle<int>(0, y, getWidth(), kProcessButtonHeight);
 }
 
 bool SampleOrganizerEditor::isInterestedInFileDrag(const juce::StringArray& files)

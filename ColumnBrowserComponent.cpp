@@ -9,7 +9,14 @@ juce::StringArray ColumnBrowserComponent::getDefaultCategories()
 
 ColumnBrowserComponent::ColumnBrowserComponent()
 {
-    setWantsKeyboardFocus(false);
+    setWantsKeyboardFocus(true);
+    folderIcon = AssetLoader::getFolderDarkGreyIcon();
+    if (folderIcon)
+    {
+        folderIconWhite = folderIcon->createCopy();
+        if (folderIconWhite)
+            folderIconWhite->replaceColour(juce::Colour(0xff393E46), juce::Colours::white);
+    }
 }
 
 void ColumnBrowserComponent::setRootFolder(const juce::File& root)
@@ -176,15 +183,6 @@ void ColumnBrowserComponent::layoutColumns()
     }
 }
 
-static void drawFolderIcon(juce::Graphics& g, juce::Colour colour, float x, float y, float size)
-{
-    const float w = size * 1.15f;
-    const float h = size;
-    g.setColour(colour);
-    g.fillRoundedRectangle(x + 2, y + 5, w - 2, h - 5, 1.5f);
-    g.fillRoundedRectangle(x, y + 2, w * 0.5f, 5, 1.0f);
-}
-
 void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juce::Rectangle<int> bounds)
 {
     if (columnIndex < 0 || columnIndex >= columnItems.size())
@@ -193,38 +191,38 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
     int sel = (columnIndex < selectedRowInColumn.size()) ? selectedRowInColumn[columnIndex] : -1;
     g.setColour(FinderTheme::creamBg);
     g.fillRect(bounds);
-    const int iconSize = 16;
     const int padH = 12;
     const int padV = 9;
-    const int textLeft = bounds.getX() + padH + iconSize + 6;
+    // Folder SVG is 30x24; use full width of icon slot and height to match aspect (no warp)
+    const int fullIconWidth = 22;
+    const int iconHeight = (int)(fullIconWidth * 24.0f / 30.0f);
+    const int textLeft = bounds.getX() + padH + fullIconWidth + 6;
     for (int row = 0; row < items.size(); ++row)
     {
         juce::Rectangle<int> rowRect(bounds.getX(), bounds.getY() + row * kRowHeight, bounds.getWidth(), kRowHeight);
         if (!rowRect.intersects(bounds))
             continue;
         bool isDir = items.getReference(row).isDirectory();
+        bool isCategoryRow = (columnIndex == 0);
         bool selected = (row == sel);
         if (selected)
         {
-            if (isDir)
-            {
-                g.setColour(FinderTheme::selectedFolderBorder);
-                g.drawRect(rowRect.reduced(1), 1);
-            }
-            else
-            {
-                g.setColour(FinderTheme::selectedFileBg);
-                g.fillRect(rowRect);
-            }
+            g.setColour(FinderTheme::headerBar);
+            g.fillRect(rowRect);
         }
-        if (isDir)
+        if (isDir || isCategoryRow)
         {
-            float iconX = (float)(rowRect.getX() + padH);
-            float iconY = (float)(rowRect.getY() + (kRowHeight - iconSize) / 2);
-            drawFolderIcon(g, FinderTheme::textCharcoal, iconX, iconY, (float)iconSize);
+            juce::Drawable* icon = (selected && folderIconWhite) ? folderIconWhite.get() : folderIcon.get();
+            if (icon)
+            {
+                float iconX = (float)(rowRect.getX() + padH);
+                float iconY = (float)(rowRect.getY() + (kRowHeight - iconHeight) / 2);
+                icon->drawWithin(g, juce::Rectangle<float>(iconX, iconY, (float)fullIconWidth, (float)iconHeight),
+                    juce::RectanglePlacement::stretchToFit, 1.0f);
+            }
         }
-        g.setColour(selected && !isDir ? FinderTheme::textOnDark : FinderTheme::textCharcoal);
-        g.setFont(selected && isDir ? juce::Font(11.0f, juce::Font::bold) : juce::Font(11.0f, juce::Font::plain));
+        g.setColour(selected ? FinderTheme::textOnDark : FinderTheme::textCharcoal);
+        g.setFont(FinderTheme::interFont(13.0f, selected));
         juce::Rectangle<int> textRect(textLeft, rowRect.getY() + padV, rowRect.getRight() - textLeft - padH, kRowHeight - 2 * padV);
         juce::String name = items.getReference(row).getFileName();
         g.drawText(name, textRect, juce::Justification::centredLeft, true);
@@ -265,6 +263,7 @@ void ColumnBrowserComponent::resized()
 
 void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
 {
+    grabKeyboardFocus();
     int div = getDividerAtX(e.getPosition().getX());
     if (div >= 0)
     {
@@ -316,4 +315,67 @@ void ColumnBrowserComponent::mouseDrag(const juce::MouseEvent& e)
 void ColumnBrowserComponent::mouseUp(const juce::MouseEvent&)
 {
     draggingDivider = -1;
+}
+
+bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)
+{
+    if (columnItems.isEmpty())
+        return false;
+    int col = 0;
+    for (int i = (int)selectedRowInColumn.size() - 1; i >= 0; --i)
+    {
+        if (selectedRowInColumn[i] >= 0)
+        {
+            col = i;
+            break;
+        }
+    }
+    const auto& items = columnItems.getReference(col);
+    int sel = (col < selectedRowInColumn.size()) ? selectedRowInColumn[col] : -1;
+    if (sel < 0 && !items.isEmpty())
+        sel = 0;
+
+    if (key == juce::KeyPress::upKey)
+    {
+        if (sel > 0)
+        {
+            selectedRowInColumn.set(col, sel - 1);
+            repaint();
+            return true;
+        }
+        return false;
+    }
+    if (key == juce::KeyPress::downKey)
+    {
+        if (sel < items.size() - 1)
+        {
+            selectedRowInColumn.set(col, sel + 1);
+            repaint();
+            return true;
+        }
+        return false;
+    }
+    if (key == juce::KeyPress::leftKey)
+    {
+        if (onKeyLeft)
+        {
+            onKeyLeft();
+            return true;
+        }
+        return false;
+    }
+    if (key == juce::KeyPress::rightKey)
+    {
+        if (sel >= 0 && sel < items.size())
+        {
+            juce::File f = items.getReference(sel);
+            if (f.isDirectory() && onFolderSelected)
+            {
+                onFolderSelected(col, sel);
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
 }

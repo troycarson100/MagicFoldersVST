@@ -35,6 +35,8 @@ target_include_directories(SampleOrganizer PRIVATE
 juce_add_binary_data(SampleOrganizerAssets
     SOURCES
         assets/DarkGreyArrowRight.svg
+        assets/FolderDarkGrey_Icon.svg
+        assets/GearSettingsIcon.png
         assets/GearSettingsIcon.svg
         assets/MagicFolders_Logo_White.svg
         assets/Plus_Icon.svg
