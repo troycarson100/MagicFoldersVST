@@ -227,6 +227,8 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     forwardBtn.setEnabled(true);
     addAndMakeVisible(forwardBtn);
     breadcrumbLabel.setColour(juce::Label::textColourId, textOnDark);
+    breadcrumbLabel.setColour(juce::Label::backgroundColourId, FinderTheme::topBar);
+    breadcrumbLabel.setOpaque(true);
     breadcrumbLabel.setFont(interFont(14.0f));
     breadcrumbLabel.setText("Set destination in Settings " + juce::String::fromUTF8("\xe2\x86\x92"), juce::dontSendNotification);
     breadcrumbLabel.setInterceptsMouseClicks(false, false);
@@ -260,7 +262,14 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
         columnPath = columnBrowser.getPath();
         updateBreadcrumb();
     };
-    addAndMakeVisible(columnBrowser);
+    columnBrowser.onColumnWidthsChanged = [this] {
+        juce::Rectangle<int> colBounds = getColumnBrowserBounds();
+        int cw = columnBrowser.getTotalContentWidth();
+        columnBrowser.setBounds(0, 0, juce::jmax(colBounds.getWidth(), cw), colBounds.getHeight());
+    };
+    columnViewport.setViewedComponent(&columnBrowser, false);
+    columnViewport.setScrollBarsShown(true, true);
+    addAndMakeVisible(columnViewport);
 
     columnPlaceholderLabel.setText("", juce::dontSendNotification);
     columnPlaceholderLabel.setColour(juce::Label::textColourId, textCharcoal);
@@ -278,6 +287,10 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     dragLabel.setFont(interFont(15.0f, true));
     dragLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(dragLabel);
+    queueListContent.editor = this;
+    queueViewport.setViewedComponent(&queueListContent, false);
+    queueViewport.setScrollBarsShown(true, false);
+    addChildComponent(queueViewport);
     queueLabel.setColour(juce::Label::textColourId, textCharcoal);
     queueLabel.setFont(interFont(13.0f));
     addAndMakeVisible(queueLabel);
@@ -299,7 +312,11 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
             breadcrumbLabel.setText("Add samples to the queue first.", juce::dontSendNotification);
             return;
         }
-        processor.currentProcessDirectory = columnBrowser.getSelectedFolder();
+        // Always use the selected pack folder (left sidebar) as destination, not the column browser selection
+        if (selectedPackIndex >= 0 && selectedPackIndex < packDirs.size())
+            processor.currentProcessDirectory = packDirs[selectedPackIndex];
+        else
+            processor.currentProcessDirectory = processor.outputDirectory;
         if (!processor.currentProcessDirectory.isDirectory())
             processor.currentProcessDirectory = processor.outputDirectory;
         juce::Timer::callAfterDelay(50, [this]() {
@@ -309,6 +326,10 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
                 breadcrumbLabel.setVisible(true);
                 breadcrumbLabel.setText("Done! " + juce::String(processor.processed.size()) + " samples organized.", juce::dontSendNotification);
                 refreshPackList();
+                dragLabel.setVisible(true);
+                queueViewport.setVisible(false);
+                queueLabel.setVisible(false);
+                updateBreadcrumb();
                 repaint();
             }
             catch (const std::exception& ex)
@@ -345,6 +366,31 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
     readerSource.reset();
     sourcePlayer.setSource(nullptr);
     deviceManager.closeAudioDevice();
+}
+
+void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
+{
+    if (!editor) return;
+    auto& q = editor->processor.queue;
+    if (q.isEmpty()) return;
+    using namespace FinderTheme;
+    const int padH = 8;
+    const int headerTopPad = 2;
+    const int lineHeight = 18;
+    g.setColour(textCharcoal);
+    // Bold header at top: "X samples in queue"
+    g.setFont(interFont(14.0f, true));
+    juce::String header = juce::String(q.size()) + (q.size() == 1 ? " sample in queue" : " samples in queue");
+    g.drawText(header, padH, headerTopPad, getWidth() - 2 * padH, lineHeight, juce::Justification::topLeft, true);
+    // Sample names below
+    g.setFont(interFont(12.0f));
+    int y = headerTopPad + lineHeight;
+    for (const auto& info : q)
+    {
+        juce::String name = info.sourceFile.getFileName();
+        g.drawText(name, padH, y, getWidth() - 2 * padH, lineHeight, juce::Justification::topLeft, true);
+        y += lineHeight;
+    }
 }
 
 void SampleOrganizerEditor::paint(juce::Graphics& g)
@@ -416,16 +462,7 @@ void SampleOrganizerEditor::paint(juce::Graphics& g)
         g.drawDashedLine(juce::Line<float>((float)dragBounds.getRight(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getBottom()), dash, 2, 1.0f);
         g.drawDashedLine(juce::Line<float>((float)dragBounds.getX(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getY()), dash, 2, 1.0f);
     }
-    if (!processor.queue.isEmpty())
-    {
-        g.setColour(textCharcoal);
-        g.setFont(interFont(12.0f));
-        juce::Rectangle<int> textArea = dragBounds.reduced(12, 8);
-        juce::StringArray names;
-        for (const auto& info : processor.queue)
-            names.add(info.sourceFile.getFileName());
-        g.drawFittedText(names.joinIntoString("\n"), textArea, juce::Justification::topLeft, juce::jmin(8, names.size()), 1.0f);
-    }
+    // Queue list is drawn by queueListContent inside queueViewport (scrollable)
     // Process Samples button: full width dark
     juce::Rectangle<int> btnBounds = getProcessButtonBounds();
     g.setColour(processBtnBg);
@@ -456,7 +493,9 @@ void SampleOrganizerEditor::resized()
     updateForwardButtonState();
 
     juce::Rectangle<int> colBounds = getColumnBrowserBounds();
-    columnBrowser.setBounds(colBounds);
+    columnViewport.setBounds(colBounds);
+    int cw = columnBrowser.getTotalContentWidth();
+    columnBrowser.setBounds(0, 0, juce::jmax(colBounds.getWidth(), cw), colBounds.getHeight());
     bool hasPackSelected = selectedPackIndex >= 0 && selectedPackIndex < packDirs.size();
     columnPlaceholderLabel.setVisible(false);
     columnPlaceholderLabel.setBounds(colBounds);
@@ -465,15 +504,21 @@ void SampleOrganizerEditor::resized()
     juce::Rectangle<int> dragInner = dragBounds.reduced(16, 10);
     dragLabel.setBounds(dragInner);
     queueLabel.setBounds(dragInner);
+    const int kQueueLineHeight = 18;
+    const int kQueueHeaderHeight = 20;  // headerTopPad(2) + lineHeight(18)
     if (!processor.queue.isEmpty())
     {
         dragLabel.setVisible(false);
-        queueLabel.setVisible(true);
-        queueLabel.setText(juce::String(processor.queue.size()) + " sample(s) in queue", juce::dontSendNotification);
+        queueLabel.setVisible(false);
+        queueViewport.setBounds(dragInner);
+        int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+        queueListContent.setSize(dragInner.getWidth(), juce::jmax(dragInner.getHeight(), contentH));
+        queueViewport.setVisible(true);
     }
     else
     {
         dragLabel.setVisible(true);
+        queueViewport.setVisible(false);
         queueLabel.setVisible(false);
     }
     processBtn.setBounds(getProcessButtonBounds());
@@ -1016,8 +1061,15 @@ void SampleOrganizerEditor::filesDropped(const juce::StringArray& files, int, in
         if (file.existsAsFile()) fileArray.add(file);
     }
     processor.addFiles(fileArray);
-    queueLabel.setText(juce::String(processor.queue.size()) + " sample(s) in queue", juce::dontSendNotification);
-    queueLabel.setVisible(true);
+    auto dragInner = getDragAreaBounds().reduced(16, 10);
+    const int kQueueLineHeight = 18;
+    const int kQueueHeaderHeight = 20;
+    queueViewport.setBounds(dragInner);
+    int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+    queueListContent.setSize(dragInner.getWidth(), juce::jmax(dragInner.getHeight(), contentH));
+    queueViewport.setVisible(true);
     dragLabel.setVisible(false);
+    queueLabel.setVisible(false);
+    queueListContent.repaint();
     repaint();
 }

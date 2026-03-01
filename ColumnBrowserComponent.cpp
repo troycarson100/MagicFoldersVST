@@ -280,11 +280,19 @@ juce::File ColumnBrowserComponent::getParentForColumn(int column) const
 {
     if (column == 0)
         return rootFolder;
-    if (path.isEmpty())
-        return {};
-    if (column == 1)
-        return path.getReference(0);
-    return path.getLast();  // column 2
+    if (column >= 1 && column - 1 < path.size())
+        return path.getReference(column - 1);
+    return juce::File();
+}
+
+int ColumnBrowserComponent::getTotalContentWidth() const
+{
+    int total = 0;
+    for (int i = 0; i < columnWidths.size(); ++i)
+        total += columnWidths[i];
+    if (columnItems.size() > 1)
+        total += (int)(columnItems.size() - 1) * kDividerWidth;
+    return juce::jmax(1, total);
 }
 
 juce::File ColumnBrowserComponent::getSelectedFileInLastColumn() const
@@ -308,6 +316,8 @@ void ColumnBrowserComponent::refreshColumns()
     }
     struct FileCmp { int compareElements(const juce::File& a, const juce::File& b) const { return a.getFileName().compareNatural(b.getFileName()); } };
     FileCmp cmp;
+
+    // Column 0: root's children (folders only)
     juce::Array<juce::File> col0;
     for (const auto& f : rootFolder.findChildFiles(juce::File::findDirectories, false))
         col0.add(f);
@@ -315,65 +325,61 @@ void ColumnBrowserComponent::refreshColumns()
     columnItems.add(col0);
     selectedRowInColumn.add(-1);
 
-    juce::File current;
-    if (path.isEmpty())
+    // Columns 1 .. path.size(): one column per path level; last column also gets files
+    const int numColumns = 1 + (int)path.size();
+    for (int i = 0; i < (int)path.size(); ++i)
     {
-        juce::Array<juce::File> empty;
-        columnItems.add(empty);
-        selectedRowInColumn.add(-1);
-        columnItems.add(empty);
-        selectedRowInColumn.add(-1);
-    }
-    else if (path.size() == 1)
-    {
-        current = path.getReference(0);
-        juce::Array<juce::File> subdirs;
+        juce::File current = path.getReference(i);
+        juce::Array<juce::File> items;
         if (current.isDirectory())
         {
             for (const auto& f : current.findChildFiles(juce::File::findDirectories, false))
-                subdirs.add(f);
-            subdirs.sort(cmp);
+                items.add(f);
+            items.sort(cmp);
+            bool isLastColumn = (i == (int)path.size() - 1);
+            if (isLastColumn)
+            {
+                juce::Array<juce::File> files;
+                current.findChildFiles(files, juce::File::findFiles, false, "*.wav;*.aif;*.aiff");
+                files.sort(cmp);
+                for (const auto& f : files)
+                    items.add(f);
+            }
         }
-        columnItems.add(subdirs);
+        columnItems.add(items);
         selectedRowInColumn.add(-1);
+    }
+
+    // Ensure at least 3 column slots (like Finder) when path is shallow or empty
+    while (columnItems.size() < 3)
+    {
         columnItems.add(juce::Array<juce::File>());
         selectedRowInColumn.add(-1);
     }
-    else
+
+    // Column widths: grow array with default width for new columns
+    const int defaultW = kCol1Width;
+    while (columnWidths.size() < columnItems.size())
     {
-        current = path.getReference(0);
-        juce::Array<juce::File> subdirs;
-        if (current.isDirectory())
-        {
-            for (const auto& f : current.findChildFiles(juce::File::findDirectories, false))
-                subdirs.add(f);
-            subdirs.sort(cmp);
-        }
-        columnItems.add(subdirs);
-        selectedRowInColumn.add(-1);
-        current = path.getReference(1);
-        juce::Array<juce::File> lastItems;
-        if (current.isDirectory())
-        {
-            for (const auto& f : current.findChildFiles(juce::File::findDirectories, false))
-                lastItems.add(f);
-            lastItems.sort(cmp);
-            juce::Array<juce::File> files;
-            current.findChildFiles(files, juce::File::findFiles, false, "*.wav;*.aif;*.aiff");
-            files.sort(cmp);
-            for (const auto& f : files)
-                lastItems.add(f);
-        }
-        columnItems.add(lastItems);
-        selectedRowInColumn.add(-1);
+        int idx = (int)columnWidths.size();
+        columnWidths.add(idx < 2 ? (idx == 0 ? kCol1Width : kCol2Width) : defaultW);
     }
-    if (columnWidths.size() < columnItems.size())
+    if (columnWidths.size() > columnItems.size())
+        columnWidths.resize(columnItems.size());
+
+    // Restore selection in each column from path so previously selected folders stay highlighted
+    for (int c = 0; c < path.size() && c < columnItems.size(); ++c)
     {
-        columnWidths.clear();
-        columnWidths.add(kCol1Width);
-        columnWidths.add(kCol2Width);
-        int rest = getWidth() - kCol1Width - kCol2Width - (columnItems.size() - 1) * kDividerWidth;
-        columnWidths.add(juce::jmax(kMinColumnWidth, rest));
+        const auto& items = columnItems.getReference(c);
+        juce::File target = path.getReference(c);
+        for (int r = 0; r < items.size(); ++r)
+        {
+            if (items.getReference(r).getFullPathName() == target.getFullPathName())
+            {
+                selectedRowInColumn.set(c, r);
+                break;
+            }
+        }
     }
     repaint();
 }
@@ -393,10 +399,12 @@ int ColumnBrowserComponent::getColumnAtX(int x) const
 int ColumnBrowserComponent::getDividerAtX(int x) const
 {
     int cx = 0;
+    const int halfGrab = kDividerGrabWidth / 2;
     for (int i = 0; i < columnWidths.size(); ++i)
     {
         cx += columnWidths[i];
-        if (x >= cx && x < cx + kDividerWidth)
+        // Divider drawn at cx (1px); hit-test a wider strip so it's easier to grab
+        if (x >= cx - halfGrab && x < cx + kDividerWidth + halfGrab)
             return i;
         cx += kDividerWidth;
     }
@@ -405,14 +413,17 @@ int ColumnBrowserComponent::getDividerAtX(int x) const
 
 void ColumnBrowserComponent::layoutColumns()
 {
-    if (columnWidths.size() < 3)
+    int n = (int)columnWidths.size();
+    if (n == 0 || getWidth() <= 0)
         return;
-    int total = columnWidths[0] + kDividerWidth + columnWidths[1] + kDividerWidth + columnWidths[2];
-    if (getWidth() > 0 && total != getWidth())
-    {
-        int diff = getWidth() - total;
-        columnWidths.set(2, juce::jmax(kMinColumnWidth, columnWidths[2] + diff));
-    }
+    int total = 0;
+    for (int i = 0; i < n; ++i)
+        total += columnWidths[i];
+    total += (n - 1) * kDividerWidth;
+    int diff = getWidth() - total;
+    // Only expand the last column to fill (never shrink it), so divider drags aren't undone
+    if (diff > 0 && n > 0)
+        columnWidths.set(n - 1, juce::jmax(kMinColumnWidth, columnWidths[n - 1] + diff));
 }
 
 void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juce::Rectangle<int> bounds)
@@ -485,15 +496,24 @@ void ColumnBrowserComponent::paint(juce::Graphics& g)
 
 void ColumnBrowserComponent::resized()
 {
-    if (columnWidths.isEmpty() && columnItems.size() >= 3)
+    if (columnWidths.size() < columnItems.size())
     {
-        columnWidths.add(kCol1Width);
-        columnWidths.add(kCol2Width);
-        int rest = getWidth() - kCol1Width - kCol2Width - 2 * kDividerWidth;
-        if (rest < 0) rest = getWidth() / 3;
-        columnWidths.add(juce::jmax(kMinColumnWidth, rest));
+        while (columnWidths.size() < columnItems.size())
+        {
+            int idx = (int)columnWidths.size();
+            columnWidths.add(idx < 2 ? (idx == 0 ? kCol1Width : kCol2Width) : kCol1Width);
+        }
     }
     layoutColumns();
+}
+
+void ColumnBrowserComponent::mouseMove(const juce::MouseEvent& e)
+{
+    int div = getDividerAtX(e.getPosition().getX());
+    if (div >= 0)
+        setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+    else
+        setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 
 void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
@@ -608,23 +628,24 @@ void ColumnBrowserComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (draggingDivider < 0)
         return;
+    // Divider i sits between column i and column i+1. Resize only those two columns.
+    const int leftCol = draggingDivider;
+    const int rightCol = draggingDivider + 1;
+    if (rightCol >= columnWidths.size())
+        return;
     int dx = e.getPosition().getX() - lastDividerX;
     lastDividerX = e.getPosition().getX();
-    if (draggingDivider < columnWidths.size())
-    {
-        int newW = juce::jmax(kMinColumnWidth, columnWidths[draggingDivider] + dx);
-        columnWidths.set(draggingDivider, newW);
-    }
-    if (draggingDivider > 0 && draggingDivider - 1 < columnWidths.size())
-    {
-        int newW = juce::jmax(kMinColumnWidth, columnWidths[draggingDivider - 1] - dx);
-        columnWidths.set(draggingDivider - 1, newW);
-    }
+    int newLeft = juce::jmax(kMinColumnWidth, columnWidths[leftCol] + dx);
+    int newRight = juce::jmax(kMinColumnWidth, columnWidths[rightCol] - dx);
+    columnWidths.set(leftCol, newLeft);
+    columnWidths.set(rightCol, newRight);
     repaint();
 }
 
 void ColumnBrowserComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (draggingDivider >= 0 && onColumnWidthsChanged)
+        onColumnWidthsChanged();
     draggingDivider = -1;
 }
 

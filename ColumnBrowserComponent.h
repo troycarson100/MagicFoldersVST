@@ -10,6 +10,7 @@ public:
     ColumnBrowserComponent();
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseMove(const juce::MouseEvent& e) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
@@ -22,14 +23,19 @@ public:
     juce::Array<juce::File> getPath() const { return path; }
     juce::File getFileAt(int column, int row) const;
     juce::File getSelectedFileInLastColumn() const;  // selected item in last column if it's a file
+    /** Total width needed to show all columns and dividers (for viewport content size). */
+    int getTotalContentWidth() const;
 
     std::function<void(int column, int row)> onFolderSelected;
     std::function<void(int row)> onFileSelected;
     std::function<void()> onKeyLeft;  // back (e.g. when user presses Left)
     std::function<void()> onPathChanged;  // called after rename so parent can sync
+    std::function<void()> onColumnWidthsChanged;  // called after divider drag so parent can update content size
 
     static constexpr int kMinColumnWidth = 80;
     static constexpr int kDividerWidth = 1;
+    /** Hit-test width for divider drag (wider than drawn line so it's easier to grab). */
+    static constexpr int kDividerGrabWidth = 8;
     static constexpr int kRowHeight = 34;
     static constexpr int kCol1Width = 200;
     static constexpr int kCol2Width = 200;

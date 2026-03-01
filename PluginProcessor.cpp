@@ -61,6 +61,11 @@ void SampleOrganizerProcessor::addFiles(const juce::Array<juce::File>& files)
         bool isAudio = (ext == "wav" || ext == "aif" || ext == "aiff");
         if (f.existsAsFile() && isAudio)
         {
+            juce::String path = f.getFullPathName();
+            bool alreadyInQueue = false;
+            for (const auto& q : queue)
+                if (q.sourceFile.getFullPathName() == path) { alreadyInQueue = true; break; }
+            if (alreadyInQueue) continue;
             SampleInfo info;
             info.sourceFile = f;
             info.name = f.getFileNameWithoutExtension();
@@ -147,9 +152,11 @@ void SampleOrganizerProcessor::processAll()
 bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
 {
     juce::File baseDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
-    juce::File folder = baseDir
-        .getChildFile(info.category)
-        .getChildFile(info.type == "Loop" ? "Loops" : "One-Shots");
+    juce::File folder = baseDir.getChildFile(info.category);
+    juce::String typeName = (info.type == "Loop") ? "Loops" : "One-Shots";
+    // Don't add a type subfolder with the same name (avoids Loops/Loops, One-Shots/One-Shots)
+    if (folder.getFileName() != typeName)
+        folder = folder.getChildFile(typeName);
 
     folder.createDirectory();
 

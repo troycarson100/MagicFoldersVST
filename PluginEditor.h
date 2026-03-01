@@ -84,7 +84,8 @@ private:
     juce::Array<juce::Array<juce::File>> pathHistory;
     juce::Array<juce::Array<juce::File>> pathForward;
 
-    // Column browser
+    // Column browser (inside viewport for horizontal scroll when many columns)
+    juce::Viewport columnViewport;
     ColumnBrowserComponent columnBrowser;
     juce::Label columnPlaceholderLabel;
     juce::Array<juce::File> columnPath;
@@ -92,6 +93,13 @@ private:
     // Drag area & process
     juce::Component dragArea;
     juce::Label dragLabel;
+    juce::Viewport queueViewport;
+    struct QueueListContent : juce::Component
+    {
+        SampleOrganizerEditor* editor = nullptr;
+        void paint(juce::Graphics& g) override;
+    };
+    QueueListContent queueListContent;
     juce::Label queueLabel;
     juce::TextButton processBtn;
     bool isDragOver = false;
