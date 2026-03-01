@@ -2,18 +2,18 @@
 
 using namespace FinderTheme;
 
-static juce::StringArray getKeyList()
+namespace
 {
-    return { "C Major", "C Minor", "C# Major", "C# Minor", "D Major", "D Minor",
-             "D# Major", "D# Minor", "E Major", "E Minor", "F Major", "F Minor",
-             "F# Major", "F# Minor", "G Major", "G Minor", "G# Major", "G# Minor",
-             "A Major", "A Minor", "A# Major", "A# Minor", "B Major", "B Minor" };
-}
-
-static bool isAudioPath(const juce::String& path)
-{
-    juce::String lower(path.trim().toLowerCase());
-    return lower.endsWith(".wav") || lower.endsWith(".aif") || lower.endsWith(".aiff");
+    struct ProcessButtonLAF : juce::LookAndFeel_V4
+    {
+        void drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool isOver, bool isDown) override
+        {
+            juce::Rectangle<float> rect = b.getLocalBounds().toFloat();
+            g.setColour(isOver ? processBtnHover : processBtnBg);
+            g.fillRect(rect);
+        }
+    };
+    ProcessButtonLAF s_processButtonLAF;
 }
 
 static juce::StringArray expandDroppedPaths(const juce::StringArray& list)
@@ -45,289 +45,239 @@ static juce::StringArray expandDroppedPaths(const juce::StringArray& list)
     return out;
 }
 
-const juce::String kFileDragPrefix("SampleOrganizerFile:");
-
-// --- FolderListModel ---
-int SampleOrganizerEditor::FolderListModel::getNumRows()
+static bool isAudioPath(const juce::String& path)
 {
-    return editor.folderNames.size();
+    juce::String lower(path.trim().toLowerCase());
+    return lower.endsWith(".wav") || lower.endsWith(".aif") || lower.endsWith(".aiff");
 }
 
-void SampleOrganizerEditor::FolderListModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
+juce::StringArray SampleOrganizerEditor::expandDroppedPaths(const juce::StringArray& list) { return ::expandDroppedPaths(list); }
+bool SampleOrganizerEditor::isAudioPath(const juce::String& path) { return ::isAudioPath(path); }
+
+// --- PackListModel ---
+int SampleOrganizerEditor::PackListModel::getNumRows()
 {
-    bool rowIsDragOver = (row == editor.dragOverFolderIndex);
-    if (rowIsDragOver)
-        g.fillAll(accent.withAlpha(0.15f));
-    else if (selected)
-        g.fillAll(selectedBg);
-    g.setColour(selected ? textPrimary : textDim);
-    g.setFont(10.0f);
-    juce::String name = row < editor.folderNames.size() ? editor.folderNames[row] : juce::String();
-    int count = 0;
-    if (row >= 0 && row < editor.categoryDirs.size())
-    {
-        juce::File cat = editor.categoryDirs[row];
-        juce::File oneShots = cat.getChildFile("One-Shots");
-        juce::File loops = cat.getChildFile("Loops");
-        if (oneShots.isDirectory()) count += oneShots.getNumberOfChildFiles(juce::File::findFiles, "*");
-        if (loops.isDirectory()) count += loops.getNumberOfChildFiles(juce::File::findFiles, "*");
-    }
-    g.drawText("> " + name, 12, 0, w - 40, h, juce::Justification::centredLeft);
-    g.setColour(textSub);
-    g.setFont(9.0f);
-    g.drawText(juce::String(count), w - 36, 0, 32, h, juce::Justification::centredRight);
+    return editor.packNames.size();
 }
 
-void SampleOrganizerEditor::FolderListModel::listBoxItemClicked(int row, const juce::MouseEvent& e)
+void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
 {
-    if (e.mods.isRightButtonDown())
-    {
-        editor.showFolderContextMenu(row, e.getScreenX(), e.getScreenY());
-        return;
-    }
-    editor.selectedFolderIndex = row;
-    editor.selectedFileIndex = -1;
-    editor.refreshFileList();
-    editor.folderList.repaint();
-    editor.fileList.repaint();
-}
-
-void SampleOrganizerEditor::FolderListModel::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
-{
-    editor.startRenameFolder(row);
-}
-
-// --- FileListModel ---
-int SampleOrganizerEditor::FileListModel::getNumRows()
-{
-    return editor.filesInSelectedCategory.size();
-}
-
-void SampleOrganizerEditor::FileListModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
-{
+    g.fillAll(FinderTheme::sidebarDarkBar);
     if (selected)
-        g.fillAll(selectedBg);
-    juce::String name = row < editor.filesInSelectedCategory.size()
-        ? editor.filesInSelectedCategory[row].getFileName() : juce::String();
-    juce::String path = row < editor.filesInSelectedCategory.size()
-        ? editor.filesInSelectedCategory[row].getFullPathName() : juce::String();
-    bool isPlaying = path == editor.playingFilePath;
-    g.setColour(textDim);
-    g.setFont(9.0f);
-    g.drawText("*", 14, 0, 16, h, juce::Justification::centredLeft);
-    g.setColour(selected ? textPrimary : textDim);
-    g.setFont(10.0f);
-    g.drawText(name, 32, 0, w - 90, h, juce::Justification::centredLeft);
-    // Play/Stop button area
-    int btnLeft = w - 78;
-    juce::Rectangle<int> btnRect(btnLeft, (h - 18) / 2, 70, 18);
-    g.setColour(isPlaying ? accent : border);
-    g.fillRoundedRectangle(btnRect.toFloat(), 2.0f);
-    g.setColour(isPlaying ? juce::Colours::white : textSub);
-    g.setFont(8.0f);
-    g.drawText(isPlaying ? "STOP" : "PLAY", btnRect, juce::Justification::centred);
+        g.fillAll(FinderTheme::sidebarRowSelected);
+    else if (row == editor.hoveredPackRow)
+        g.fillAll(FinderTheme::sidebarRowHover);
+    g.setColour(FinderTheme::textOnDark);
+    g.setFont(selected ? juce::Font(11.0f, juce::Font::bold) : juce::Font(11.0f, juce::Font::plain));
+    juce::String name = row < editor.packNames.size() ? editor.packNames[row] : juce::String();
+    if (name.length() > 28)
+        name = name.dropLastCharacters(name.length() - 25) + "...";
+    const int padH = editor.kPackPaddingH;
+    const int padV = editor.kPackPaddingV;
+    g.drawText(name, padH, padV, w - padH - 32, h - 2 * padV, juce::Justification::centredLeft);
+    if (selected && editor.arrowRightDrawable)
+        editor.arrowRightDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
 }
 
-void SampleOrganizerEditor::FileListModel::listBoxItemClicked(int row, const juce::MouseEvent& e)
+void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
 {
-    if (e.mods.isRightButtonDown())
-    {
-        editor.showFileContextMenu(row, e.getScreenX(), e.getScreenY());
-        return;
-    }
-    int w = editor.fileList.getWidth();
-    int btnLeft = w - 78;
-    // If click is in play button area, toggle play
-    if (e.getPosition().getX() >= btnLeft)
-    {
-        editor.playFile(row);
-        return;
-    }
-    editor.selectedFileIndex = row;
-    editor.fileList.repaint();
-}
-
-void SampleOrganizerEditor::FileListModel::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
-{
-    editor.startRenameFile(row);
+    if (row < 0 || row >= editor.packNames.size()) return;
+    editor.selectedPackIndex = row;
+    editor.columnPath.clear();
+    editor.pathHistory.clear();
+    editor.pathForward.clear();
+    if (row >= 0 && row < editor.packDirs.size())
+        editor.columnBrowser.setRootFolder(editor.packDirs[row]);
+    editor.columnBrowser.setPath(editor.columnPath);
+    editor.updateBreadcrumb();
+    editor.packList.repaint();
 }
 
 // --- SampleOrganizerEditor ---
 SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
-    : AudioProcessorEditor(&p), processor(p),
-      folderListModel(*this), fileListModel(*this)
+    : AudioProcessorEditor(&p), processor(p), packListModel(*this)
 {
-    setSize(700, 540);
+    settingsOverlay = std::make_unique<SettingsOverlayComponent>(processor);
+    setSize(920, 600);
+    setResizeLimits(860, 580, 4096, 4096);
     setWantsKeyboardFocus(true);
 
     formatManager.registerBasicFormats();
     sourcePlayer.setSource(&transportSource);
     deviceManager.initialiseWithDefaultDevices(0, 2);
 
-    // Top bar
-    titleLabel.setText("SAMPLE ORGANIZER  v1.0", juce::dontSendNotification);
-    titleLabel.setFont(juce::Font(10.0f));
-    titleLabel.setColour(juce::Label::textColourId, textSub);
-    addAndMakeVisible(titleLabel);
-
-    outputPathLabel.setText("○ NO OUTPUT", juce::dontSendNotification);
-    outputPathLabel.setFont(juce::Font(9.0f));
-    outputPathLabel.setColour(juce::Label::textColourId, textSub);
-    addAndMakeVisible(outputPathLabel);
-
-    folderBtn.setButtonText("FOLDER");
-    folderBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    folderBtn.setColour(juce::TextButton::textColourOffId, textDim);
-    folderBtn.onClick = [this]
-    {
-        auto chooser = std::make_shared<juce::FileChooser>("Select Output Folder", juce::File(), juce::String());
-        chooser->launchAsync(
-            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-            [this, chooser](const juce::FileChooser& fc)
-            {
-                auto result = fc.getResult();
-                if (result != juce::File())
-                {
-                    processor.setOutputDirectory(result);
-                    juce::String path = result.getFullPathName();
-                    if (path.length() > 45)
-                        path = path.substring(0, 22) + "…" + path.substring(path.length() - 20);
-                    outputPathLabel.setText("● " + path, juce::dontSendNotification);
-                    outputPathLabel.setColour(juce::Label::textColourId, juce::Colour(0xff27c93f));
-                    updateStatus("Output: " + result.getFullPathName());
-                    refreshFolderList();
-                    refreshFileList();
-                }
-            });
-    };
-    addAndMakeVisible(folderBtn);
-
-    // Metadata bar
-    juce::StringArray keys = getKeyList();
-    keySelector.addItemList(keys, 1);
-    int keyIndex = keys.indexOf(processor.projectKey);
-    keySelector.setSelectedItemIndex(keyIndex >= 0 ? keyIndex : 0);
-    keySelector.setColour(juce::ComboBox::backgroundColourId, juce::Colours::transparentBlack);
-    keySelector.setColour(juce::ComboBox::textColourId, textPrimary);
-    keySelector.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
-    keySelector.onChange = [this] { processor.projectKey = keySelector.getText(); };
-    addAndMakeVisible(keySelector);
-
-    bpmDownBtn.setButtonText("-");
-    bpmDownBtn.onClick = [this] { processor.projectBPM = juce::jmax(60, processor.projectBPM - 1); bpmLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification); };
-    bpmUpBtn.setButtonText("+");
-    bpmUpBtn.onClick = [this] { processor.projectBPM = juce::jmin(200, processor.projectBPM + 1); bpmLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification); };
-    bpmLabel.setText(juce::String(processor.projectBPM), juce::dontSendNotification);
-    bpmLabel.setColour(juce::Label::textColourId, textPrimary);
-    addAndMakeVisible(bpmDownBtn);
-    addAndMakeVisible(bpmLabel);
-    addAndMakeVisible(bpmUpBtn);
-
-    genreInput.setText(processor.defaultGenre);
-    genreInput.setColour(juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
-    genreInput.setColour(juce::TextEditor::textColourId, textPrimary);
-    genreInput.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
-    genreInput.onTextChange = [this] { processor.defaultGenre = genreInput.getText(); };
-    addAndMakeVisible(genreInput);
-
-    processBtn.setButtonText("PROCESS");
-    processBtn.setColour(juce::TextButton::buttonColourId, accent);
-    processBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
-    processBtn.onClick = [this]
-    {
+    // Sidebar assets and plus button
+    logoDrawable = AssetLoader::getLogo();
+    plusDrawable = AssetLoader::getPlusIcon();
+    arrowRightDrawable = AssetLoader::getWhiteArrowRight();
+    plusBtn.setImages(plusDrawable.get());
+    plusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    plusBtn.setColour(juce::DrawableButton::backgroundOnColourId, headerBar);
+    plusBtn.onClick = [this] {
         if (!processor.outputDirectory.isDirectory())
         {
-            updateStatus("Please choose an output folder first.");
+            if (settingsOverlay->isVisible())
+                settingsOverlay->setVisible(false);
+            return;
+        }
+        refreshPackList();
+        juce::String name = "New Pack " + juce::String(packDirs.size() + 1);
+        juce::File newDir = processor.outputDirectory.getChildFile(name);
+        if (newDir.createDirectory())
+        {
+            refreshPackList();
+            for (int i = 0; i < packDirs.size(); ++i)
+            {
+                if (packDirs[i] == newDir) { selectedPackIndex = i; break; }
+            }
+            columnPath.clear();
+            columnBrowser.setRootFolder(newDir);
+            columnBrowser.setPath(columnPath);
+            updateBreadcrumb();
+            packList.repaint();
+        }
+    };
+    addAndMakeVisible(plusBtn);
+
+    packList.setModel(&packListModel);
+    packList.setRowHeight(kPackRowHeight);
+    packList.setColour(juce::ListBox::backgroundColourId, FinderTheme::sidebarDarkBar);
+    packListHoverListener = std::make_unique<PackListHoverListener>();
+    packListHoverListener->editor = this;
+    packList.addMouseListener(packListHoverListener.get(), true);
+    packList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
+    packList.setOutlineThickness(0);
+    addAndMakeVisible(packList);
+
+    sidebarPlaceholderBtn.setButtonText("Set destination folder in\nSettings (gear icon) " + juce::String::fromUTF8("\xe2\x86\x92"));
+    sidebarPlaceholderBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    sidebarPlaceholderBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
+    sidebarPlaceholderBtn.onClick = [this] { settingsOverlay->syncFromProcessor(); settingsOverlay->setVisible(true); settingsOverlay->toFront(true); };
+    addAndMakeVisible(sidebarPlaceholderBtn);
+
+    // Header
+    backArrowDrawable = AssetLoader::getWhiteArrowLeft();
+    forwardArrowDrawable = AssetLoader::getWhiteArrowRight();
+    forwardArrowDimmedDrawable = AssetLoader::getDarkGreyArrowRight();
+    gearDrawable = AssetLoader::getGearSettingsIcon();
+    backBtn.setImages(backArrowDrawable.get());
+    backBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    backBtn.onClick = [this] { goBack(); };
+    addAndMakeVisible(backBtn);
+    forwardBtn.setImages(forwardArrowDrawable.get());
+    forwardBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
+    forwardBtn.onClick = [this] { goForward(); };
+    forwardBtn.setEnabled(true);
+    addAndMakeVisible(forwardBtn);
+    breadcrumbLabel.setColour(juce::Label::textColourId, textOnDark);
+    breadcrumbLabel.setFont(juce::Font(juce::FontOptions(12.0f)));
+    breadcrumbLabel.setText("Set destination in Settings " + juce::String::fromUTF8("\xe2\x86\x92"), juce::dontSendNotification);
+    breadcrumbLabel.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(breadcrumbLabel);
+    settingsBtn.setButtonText(juce::CharPointer_UTF8("\xe2\x9a\x99"));  // Unicode gear U+2699
+    settingsBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    settingsBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
+    settingsBtn.onClick = [this] {
+        settingsOverlay->syncFromProcessor();
+        settingsOverlay->setVisible(true);
+        settingsOverlay->toFront(true);
+    };
+    addAndMakeVisible(settingsBtn);
+
+    // Column browser
+    columnBrowser.onFolderSelected = [this](int column, int row) {
+        juce::File f = columnBrowser.getFileAt(column, row);
+        if (!f.isDirectory()) return;
+        pushPathToHistory();
+        while (columnPath.size() > column)
+            columnPath.removeLast();
+        columnPath.add(f);
+        columnBrowser.setPath(columnPath);
+        pathForward.clear();
+        updateBreadcrumb();
+        updateForwardButtonState();
+    };
+    columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
+    addAndMakeVisible(columnBrowser);
+
+    columnPlaceholderLabel.setText("Select a pack from the list", juce::dontSendNotification);
+    columnPlaceholderLabel.setColour(juce::Label::textColourId, textCharcoal);
+    columnPlaceholderLabel.setFont(juce::Font(juce::FontOptions(14.0f)));
+    columnPlaceholderLabel.setJustificationType(juce::Justification::centred);
+    columnPlaceholderLabel.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(columnPlaceholderLabel);
+
+    // Drag area
+    dragArea.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(dragArea);
+    dragLabel.setText("Drag Sample", juce::dontSendNotification);
+    dragLabel.setColour(juce::Label::textColourId, textCharcoal);
+    dragLabel.setFont(juce::Font(14.0f, juce::Font::bold));
+    dragLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(dragLabel);
+    queueLabel.setColour(juce::Label::textColourId, textCharcoal);
+    queueLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addAndMakeVisible(queueLabel);
+
+    processBtn.setButtonText("Process Samples");
+    processBtn.setColour(juce::TextButton::buttonColourId, processBtnBg);
+    processBtn.setColour(juce::TextButton::textColourOffId, textOnDark);
+    processBtn.setLookAndFeel(&s_processButtonLAF);
+    processBtn.onClick = [this] {
+        if (!processor.outputDirectory.isDirectory())
+        {
+            breadcrumbLabel.setVisible(true);
+            breadcrumbLabel.setText("Set destination folder in Settings first.", juce::dontSendNotification);
             return;
         }
         if (processor.queue.isEmpty())
         {
-            updateStatus("Queue is empty. Add or drop samples first.");
+            breadcrumbLabel.setVisible(true);
+            breadcrumbLabel.setText("Add samples to the queue first.", juce::dontSendNotification);
             return;
         }
-        int count = processor.queue.size();
-        updateStatus("Processing " + juce::String(count) + " samples…");
-        juce::Timer::callAfterDelay(50, [this]()
-        {
+        processor.currentProcessDirectory = columnBrowser.getSelectedFolder();
+        if (!processor.currentProcessDirectory.isDirectory())
+            processor.currentProcessDirectory = processor.outputDirectory;
+        juce::Timer::callAfterDelay(50, [this]() {
             try
             {
                 processor.processAll();
-                updateStatus("Done! " + juce::String(processor.processed.size()) + " samples organized.");
+                breadcrumbLabel.setVisible(true);
+                breadcrumbLabel.setText("Done! " + juce::String(processor.processed.size()) + " samples organized.", juce::dontSendNotification);
+                refreshPackList();
+                repaint();
             }
             catch (const std::exception& ex)
             {
-                updateStatus("Error: " + juce::String(ex.what()));
+                breadcrumbLabel.setVisible(true);
+                breadcrumbLabel.setText("Error: " + juce::String(ex.what()), juce::dontSendNotification);
             }
             catch (...)
             {
-                updateStatus("Error: analysis failed.");
+                breadcrumbLabel.setVisible(true);
+                breadcrumbLabel.setText("Error: analysis failed.", juce::dontSendNotification);
             }
-            refreshFolderList();
-            refreshFileList();
         });
     };
     addAndMakeVisible(processBtn);
 
-    clearBtn.setButtonText("CLEAR");
-    clearBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    clearBtn.setColour(juce::TextButton::textColourOffId, textDim);
-    clearBtn.onClick = [this]
+    settingsOverlay->onClose = [this] { settingsOverlay->setVisible(false); refreshPackList(); };
+    addChildComponent(settingsOverlay.get());
+
+    refreshPackList();
+    updateBreadcrumb();
+    if (processor.outputDirectory.isDirectory() && selectedPackIndex >= 0 && selectedPackIndex < packDirs.size())
     {
-        processor.clearQueue();
-        updateStatus("Queue cleared.");
-    };
-    addAndMakeVisible(clearBtn);
-
-    // Folder list
-    folderList.setModel(&folderListModel);
-    folderList.setRowHeight(kFinderRowHeight);
-    folderList.setColour(juce::ListBox::backgroundColourId, bg);
-    folderList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
-    folderList.setOutlineThickness(0);
-    addAndMakeVisible(folderList);
-
-    // File list (draggable)
-    fileList.setModel(&fileListModel);
-    fileList.setRowHeight(kFinderRowHeight);
-    fileList.setColour(juce::ListBox::backgroundColourId, bg);
-    fileList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
-    fileList.setOutlineThickness(0);
-    addAndMakeVisible(fileList);
-    fileList.addMouseListener(this, false);
-
-    // Rename editor (hidden until used)
-    renameEditor.setMultiLine(false);
-    renameEditor.setColour(juce::TextEditor::backgroundColourId, border);
-    renameEditor.setColour(juce::TextEditor::textColourId, juce::Colours::white);
-    renameEditor.setColour(juce::TextEditor::outlineColourId, accent);
-    renameEditor.onReturnKey = [this] { commitRename(); };
-    renameEditor.onEscapeKey = [this] { cancelRename(); };
-    renameEditor.onFocusLost = [this] { commitRename(); };
-    addChildComponent(renameEditor);
-
-    // Drop zone
-    dropZoneLabel.setText("DROP WAV / AIF FILES TO QUEUE  -  OR DRAG FROM ABLETON", juce::dontSendNotification);
-    dropZoneLabel.setColour(juce::Label::textColourId, textSub);
-    dropZoneLabel.setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(dropZoneLabel);
-
-    statusLabel.setText("Ready", juce::dontSendNotification);
-    statusLabel.setColour(juce::Label::textColourId, textSub);
-    addAndMakeVisible(statusLabel);
-
-    if (processor.outputDirectory.isDirectory())
-    {
-        outputPathLabel.setText("● " + processor.outputDirectory.getFullPathName(), juce::dontSendNotification);
-        outputPathLabel.setColour(juce::Label::textColourId, juce::Colour(0xff27c93f));
-        refreshFolderList();
+        columnBrowser.setRootFolder(packDirs[selectedPackIndex]);
+        columnBrowser.setPath(columnPath);
     }
-
-    refreshFileList();
 }
 
 SampleOrganizerEditor::~SampleOrganizerEditor()
 {
-    fileList.removeMouseListener(this);
+    if (packListHoverListener)
+        packList.removeMouseListener(packListHoverListener.get());
     transportSource.setSource(nullptr);
     readerSource.reset();
     sourcePlayer.setSource(nullptr);
@@ -336,336 +286,300 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
 
 void SampleOrganizerEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(bg);
-
-    juce::Rectangle<int> dropZone = getDropZoneBounds();
-    g.setColour(isDragOver ? accent.withAlpha(0.15f) : hover);
-    g.fillRect(dropZone);
-    g.setColour(border);
-    g.drawRect(dropZone, 1);
-
-    // Top bar panel
-    g.setColour(panel);
-    g.fillRect(0, 0, getWidth(), 44);
-    g.setColour(border);
-    g.drawHorizontalLine(43, 0, (float)getWidth());
-
-    // Metadata bar
-    g.setColour(panel);
-    g.fillRect(0, 44, getWidth(), 44);
-    g.setColour(border);
-    g.drawHorizontalLine(87, 0, (float)getWidth());
-
-    // Finder column headers
-    juce::Rectangle<int> folderBounds = getFolderListBounds();
-    g.setColour(panel);
-    g.fillRect(folderBounds.getX(), folderBounds.getY(), folderBounds.getWidth(), 24);
-    g.setColour(border);
-    g.drawHorizontalLine(folderBounds.getY() + 23, (float)folderBounds.getX(), (float)(folderBounds.getX() + folderBounds.getWidth()));
-    g.setColour(textSub);
-    g.setFont(8.0f);
-    g.drawText("FOLDERS", folderBounds.getX() + 12, folderBounds.getY() + 4, folderBounds.getWidth() - 12, 16, juce::Justification::centredLeft);
-
-    juce::Rectangle<int> fileBounds = getFileListBounds();
-    g.setColour(panel);
-    g.fillRect(fileBounds.getX(), fileBounds.getY(), fileBounds.getWidth(), 24);
-    g.setColour(border);
-    g.drawHorizontalLine(fileBounds.getY() + 23, (float)fileBounds.getX(), (float)(fileBounds.getX() + fileBounds.getWidth()));
-    g.setColour(textSub);
-    g.setFont(8.0f);
-    juce::String catName = selectedFolderIndex >= 0 && selectedFolderIndex < folderNames.size() ? folderNames[selectedFolderIndex].toUpperCase() : "FILES";
-    g.drawText(catName + "  -  " + juce::String(filesInSelectedCategory.size()) + " FILES", fileBounds.getX() + 12, fileBounds.getY() + 4, fileBounds.getWidth() - 12, 16, juce::Justification::centredLeft);
-
-    // Status bar
-    int statusY = getHeight() - 28;
-    g.setColour(panel);
-    g.fillRect(0, statusY, getWidth(), 28);
-    g.setColour(border);
-    g.drawHorizontalLine(statusY, 0, (float)getWidth());
+    g.fillAll(creamBg);
+    // Full-height dark bar on the left (220px) — black bar on the left
+    juce::Rectangle<int> leftBar(0, 0, kSidebarWidth, getHeight());
+    g.setColour(FinderTheme::sidebarDarkBar);
+    g.fillRect(leftBar);
+    // Logo in top of left bar
+    juce::Rectangle<int> logoPanel = getLogoPanelBounds();
+    juce::Rectangle<int> logoArea = logoPanel.reduced(12);
+    g.setColour(textOnDark);
+    g.setFont(juce::Font(10.5f, juce::Font::plain));
+    g.drawText("MAGIC", logoArea.getX(), logoArea.getY(), logoArea.getWidth(), 18, juce::Justification::centredLeft, true);
+    g.setFont(juce::Font(15.0f, juce::Font::plain));
+    g.drawText("FOLDERS", logoArea.getX(), logoArea.getY() + 16, logoArea.getWidth(), 22, juce::Justification::centredLeft, true);
+    // Top header bar (right of left bar): dark, for breadcrumb and gear
+    juce::Rectangle<int> headerBarRect(kSidebarWidth, 0, getWidth() - kSidebarWidth, kHeaderHeight);
+    g.setColour(FinderTheme::headerBar);
+    g.fillRect(headerBarRect);
+    // Vertical divider between left bar and content
+    g.setColour(dividerLine.withAlpha(0.5f));
+    g.fillRect(kSidebarWidth, 0, 1, getHeight());
+    // Breadcrumb in header (drawn over dark area)
+    juce::Rectangle<int> header = getHeaderBounds();
+    if (breadcrumbParts.size() > 1)
+    {
+        juce::Rectangle<int> bcBounds = header.withTrimmedLeft(78).withTrimmedRight(120);
+        int x = bcBounds.getX();
+        int y = bcBounds.getY();
+        int h = bcBounds.getHeight();
+        g.setColour(textOnDark);
+        g.setFont(juce::Font(12.0f, juce::Font::bold));
+        g.drawText(breadcrumbParts[0], x, y, 400, h, juce::Justification::centredLeft, true);
+        x += g.getCurrentFont().getStringWidth(breadcrumbParts[0]);
+        g.setFont(juce::Font(12.0f, juce::Font::plain));
+        for (int i = 1; i < breadcrumbParts.size(); ++i)
+        {
+            juce::String seg = " / " + breadcrumbParts[i];
+            g.setColour(textOnDark.withAlpha(0.85f));
+            g.drawText(seg, x, y, 400, h, juce::Justification::centredLeft, true);
+            x += g.getCurrentFont().getStringWidth(seg);
+        }
+    }
+    // Drag zone: full width, cream, dashed border
+    juce::Rectangle<int> dragBounds = getDragAreaBounds();
+    if (isDragOver)
+        g.setColour(creamBg.darker(0.05f));
+    else
+        g.setColour(creamBg);
+    g.fillRect(dragBounds);
+    juce::Colour borderCol = textCharcoal;
+    if (processor.queue.isEmpty() && !isDragOver)
+    {
+        float dash[] = { 4.0f, 4.0f };
+        g.setColour(borderCol);
+        g.drawDashedLine(juce::Line<float>((float)dragBounds.getX(), (float)dragBounds.getY(), (float)dragBounds.getRight(), (float)dragBounds.getY()), dash, 2, 1.0f);
+        g.drawDashedLine(juce::Line<float>((float)dragBounds.getRight(), (float)dragBounds.getY(), (float)dragBounds.getRight(), (float)dragBounds.getBottom()), dash, 2, 1.0f);
+        g.drawDashedLine(juce::Line<float>((float)dragBounds.getRight(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getBottom()), dash, 2, 1.0f);
+        g.drawDashedLine(juce::Line<float>((float)dragBounds.getX(), (float)dragBounds.getBottom(), (float)dragBounds.getX(), (float)dragBounds.getY()), dash, 2, 1.0f);
+    }
+    else
+    {
+        g.setColour(borderCol);
+        g.drawRect(dragBounds, 1);
+    }
+    // Process Samples button: full width dark
+    juce::Rectangle<int> btnBounds = getProcessButtonBounds();
+    g.setColour(processBtnBg);
+    g.fillRect(btnBounds);
 }
 
 void SampleOrganizerEditor::resized()
 {
     int w = getWidth();
-    int topH = 44;
-    int metaH = 44;
-    int finderY = topH + metaH;
-    int finderH = 320;
-    int dropH = 52;
-    int statusH = 28;
+    int h = getHeight();
 
-    titleLabel.setBounds(16, 12, 220, 20);
-    outputPathLabel.setBounds(w - 200, 12, 120, 20);
-    folderBtn.setBounds(w - 72, 10, 60, 24);
+    juce::Rectangle<int> logoPanel = getLogoPanelBounds();
+    plusBtn.setBounds(logoPanel.getRight() - 40, logoPanel.getY() + (logoPanel.getHeight() - 32) / 2, 32, 32);
+    juce::Rectangle<int> packListArea = getPackListBounds();
+    packList.setBounds(packListArea);
+    bool hasDestination = processor.outputDirectory.isDirectory();
+    sidebarPlaceholderBtn.setVisible(!hasDestination);
+    sidebarPlaceholderBtn.setBounds(packListArea.reduced(12));
+    packList.setVisible(hasDestination);
 
-    keySelector.setBounds(14, 52, 100, 28);
-    bpmDownBtn.setBounds(124, 56, 24, 20);
-    bpmLabel.setBounds(148, 52, 28, 28);
-    bpmUpBtn.setBounds(176, 56, 24, 20);
-    genreInput.setBounds(210, 52, 70, 28);
-    processBtn.setBounds(w - 170, 50, 80, 28);
-    clearBtn.setBounds(w - 82, 50, 68, 28);
+    juce::Rectangle<int> header = getHeaderBounds();
+    backBtn.setBounds(header.getX() + 8, header.getY() + (header.getHeight() - 28) / 2, 28, 28);
+    forwardBtn.setBounds(header.getX() + 40, header.getY() + (header.getHeight() - 28) / 2, 28, 28);
+    breadcrumbLabel.setBounds(header.getX() + 78, header.getY(), header.getWidth() - 120, header.getHeight());
+    settingsBtn.setBounds(header.getRight() - 44, header.getY() + (header.getHeight() - 28) / 2, 28, 28);
+    updateForwardButtonState();
 
-    juce::Rectangle<int> folderBounds = getFolderListBounds();
-    folderList.setBounds(folderBounds.getX(), folderBounds.getY() + 24, folderBounds.getWidth(), folderBounds.getHeight() - 24);
-
-    juce::Rectangle<int> fileBounds = getFileListBounds();
-    fileList.setBounds(fileBounds.getX(), fileBounds.getY() + 24, fileBounds.getWidth(), fileBounds.getHeight() - 24);
-
-    dropZoneLabel.setBounds(0, finderY + finderH, w, dropH);
-    statusLabel.setBounds(16, getHeight() - statusH - 6, w - 32, 20);
-}
-
-void SampleOrganizerEditor::mouseDown(const juce::MouseEvent& e)
-{
-    if (e.eventComponent == &fileList)
-        fileDragStartRow = fileList.getRowContainingPosition(e.getPosition().getX(), e.getPosition().getY());
-}
-
-void SampleOrganizerEditor::mouseDrag(const juce::MouseEvent& e)
-{
-    if (e.eventComponent != &fileList || fileDragStartRow < 0) return;
-    if (e.getDistanceFromDragStart() > 8)
+    juce::Rectangle<int> colBounds = getColumnBrowserBounds();
+    columnBrowser.setBounds(colBounds);
+    bool hasPackSelected = selectedPackIndex >= 0 && selectedPackIndex < packDirs.size();
+    columnPlaceholderLabel.setVisible(!hasPackSelected);
+    columnPlaceholderLabel.setBounds(colBounds);
+    juce::Rectangle<int> dragBounds = getDragAreaBounds();
+    dragArea.setBounds(dragBounds);
+    dragLabel.setBounds(dragBounds);
+    queueLabel.setBounds(dragBounds.reduced(12, 8));
+    if (!processor.queue.isEmpty())
     {
-        startDragFile(fileDragStartRow);
-        fileDragStartRow = -1;
+        dragLabel.setVisible(false);
+        queueLabel.setVisible(true);
+        queueLabel.setText(juce::String(processor.queue.size()) + " sample(s) in queue", juce::dontSendNotification);
     }
+    else
+    {
+        dragLabel.setVisible(true);
+        queueLabel.setVisible(false);
+    }
+    processBtn.setBounds(getProcessButtonBounds());
+
+    settingsOverlay->setBounds(0, 0, w, h);
 }
 
-void SampleOrganizerEditor::refreshFolderList()
+void SampleOrganizerEditor::refreshPackList()
 {
-    folderNames.clear();
-    categoryDirs.clear();
+    packNames.clear();
+    packDirs.clear();
     if (!processor.outputDirectory.isDirectory())
     {
-        selectedFolderIndex = -1;
-        folderList.updateContent();
+        selectedPackIndex = -1;
+        packList.updateContent();
         return;
     }
     for (const auto& f : processor.outputDirectory.findChildFiles(juce::File::findDirectories, false))
     {
-        folderNames.add(f.getFileName());
-        categoryDirs.add(f);
+        packNames.add(f.getFileName());
+        packDirs.add(f);
     }
-    if (selectedFolderIndex >= folderNames.size())
-        selectedFolderIndex = folderNames.size() > 0 ? 0 : -1;
-    folderList.updateContent();
-    refreshFileList();
+    if (selectedPackIndex >= packNames.size())
+        selectedPackIndex = packNames.size() > 0 ? 0 : -1;
+    packList.updateContent();
 }
 
-void SampleOrganizerEditor::refreshFileList()
+void SampleOrganizerEditor::updateForwardButtonState()
 {
-    filesInSelectedCategory.clear();
-    if (selectedFolderIndex < 0 || selectedFolderIndex >= categoryDirs.size())
+    if (pathForward.isEmpty())
+        forwardBtn.setImages(forwardArrowDimmedDrawable.get());
+    else
+        forwardBtn.setImages(forwardArrowDrawable.get());
+}
+
+void SampleOrganizerEditor::updateBreadcrumb()
+{
+    if (!processor.outputDirectory.isDirectory())
     {
-        fileList.updateContent();
+        breadcrumbParts.clear();
+        breadcrumbLabel.setText("Set destination in Settings " + juce::String::fromUTF8("\xe2\x86\x92"), juce::dontSendNotification);
+        breadcrumbLabel.setVisible(true);
         return;
     }
-    juce::File cat = categoryDirs[selectedFolderIndex];
-    juce::File oneShots = cat.getChildFile("One-Shots");
-    juce::File loops = cat.getChildFile("Loops");
-    if (oneShots.isDirectory())
-        for (const auto& f : oneShots.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff"))
-            filesInSelectedCategory.add(f);
-    if (loops.isDirectory())
-        for (const auto& f : loops.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff"))
-            filesInSelectedCategory.add(f);
-    struct FileNameCompare
+    if (selectedPackIndex < 0 || selectedPackIndex >= packNames.size())
     {
-        int compareElements(const juce::File& a, const juce::File& b) const { return a.getFileName().compareNatural(b.getFileName()); }
-    };
-    FileNameCompare fc;
-    filesInSelectedCategory.sort(fc);
-    if (selectedFileIndex >= filesInSelectedCategory.size())
-        selectedFileIndex = -1;
-    fileList.updateContent();
-}
-
-void SampleOrganizerEditor::updateStatus(const juce::String& msg)
-{
-    statusLabel.setText(msg, juce::dontSendNotification);
-}
-
-void SampleOrganizerEditor::showFolderContextMenu(int row, int screenX, int screenY)
-{
-    if (row < 0 || row >= folderNames.size()) return;
-    juce::PopupMenu m;
-    m.addItem("Rename Folder", [this, row]() { startRenameFolder(row); });
-    juce::String revealLabel =
-#if JUCE_MAC
-        "Reveal in Finder";
-#else
-        "Show in Explorer";
-#endif
-    m.addItem(revealLabel, [this, row]()
-    {
-        if (row < categoryDirs.size())
-            revealInFinder(categoryDirs[row]);
-    });
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(juce::Rectangle<int>(screenX, screenY, 1, 1)));
-}
-
-void SampleOrganizerEditor::showFileContextMenu(int row, int screenX, int screenY)
-{
-    if (row < 0 || row >= filesInSelectedCategory.size()) return;
-    juce::File file = filesInSelectedCategory[row];
-    juce::PopupMenu m;
-    m.addItem("Rename File", [this, row]() { startRenameFile(row); });
-    m.addItem(
-#if JUCE_MAC
-        "Reveal in Finder"
-#else
-        "Show in Explorer"
-#endif
-        , [this, file]() { revealInFinder(file); });
-    m.addSeparator();
-    m.addItem("Delete", [this, file]() { deleteFile(file); });
-    m.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(juce::Rectangle<int>(screenX, screenY, 1, 1)));
-}
-
-void SampleOrganizerEditor::startRenameFolder(int row)
-{
-    if (row < 0 || row >= folderNames.size()) return;
-    renameTarget = RenameTarget::Folder;
-    renamingRow = row;
-    renameInitialValue = folderNames[row];
-    renameEditor.setText(renameInitialValue);
-    renameEditor.setVisible(true);
-    juce::Rectangle<int> listBounds = folderList.getBounds();
-    int rowY = 24 + row * kFinderRowHeight;
-    renameEditor.setBounds(12, listBounds.getY() + rowY + 2, listBounds.getWidth() - 24, kFinderRowHeight - 4);
-    renameEditor.toFront(true);
-    renameEditor.grabKeyboardFocus();
-    renameEditor.selectAll();
-}
-
-void SampleOrganizerEditor::startRenameFile(int row)
-{
-    if (row < 0 || row >= filesInSelectedCategory.size()) return;
-    juce::File f = filesInSelectedCategory[row];
-    renameTarget = RenameTarget::File;
-    renamingRow = row;
-    renameInitialValue = f.getFileNameWithoutExtension();
-    renameEditor.setText(renameInitialValue);
-    renameEditor.setVisible(true);
-    juce::Rectangle<int> listBounds = fileList.getBounds();
-    int rowY = 24 + row * kFinderRowHeight;
-    renameEditor.setBounds(32, listBounds.getY() + rowY + 2, listBounds.getWidth() - 110, kFinderRowHeight - 4);
-    renameEditor.toFront(true);
-    renameEditor.grabKeyboardFocus();
-    renameEditor.selectAll();
-}
-
-void SampleOrganizerEditor::commitRename()
-{
-    juce::String newName = renameEditor.getText().trim();
-    if (renameTarget == RenameTarget::Folder && renamingRow >= 0 && renamingRow < categoryDirs.size())
-    {
-        if (newName.isEmpty() || newName == renameInitialValue)
-        {
-            cancelRename();
-            return;
-        }
-        juce::File dir = categoryDirs[renamingRow];
-        juce::File parent = dir.getParentDirectory();
-        juce::File newDir = parent.getChildFile(newName);
-        if (dir.moveFileTo(newDir))
-        {
-            categoryDirs.set(renamingRow, newDir);
-            folderNames.set(renamingRow, newName);
-            folderList.updateContent();
-            updateStatus("Renamed folder to " + newName);
-        }
-        else
-            updateStatus("Could not rename folder.");
+        breadcrumbParts.clear();
+        breadcrumbLabel.setText("Select a pack", juce::dontSendNotification);
+        breadcrumbLabel.setVisible(true);
+        return;
     }
-    else if (renameTarget == RenameTarget::File && renamingRow >= 0 && renamingRow < filesInSelectedCategory.size())
+    breadcrumbParts.clear();
+    breadcrumbParts.add(packNames[selectedPackIndex]);
+    for (const auto& f : columnPath)
+        breadcrumbParts.add(f.getFileName());
+    juce::File selFile = columnBrowser.getSelectedFileInLastColumn();
+    if (selFile.existsAsFile())
+        breadcrumbParts.add(selFile.getFileName());
+    if (breadcrumbParts.size() == 1)
     {
-        if (newName.isEmpty())
-        {
-            cancelRename();
-            return;
-        }
-        juce::File file = filesInSelectedCategory[renamingRow];
-        juce::String ext = file.getFileExtension();
-        juce::File newFile = file.getParentDirectory().getChildFile(newName + ext);
-        if (file.moveFileTo(newFile))
-        {
-            filesInSelectedCategory.set(renamingRow, newFile);
-            fileList.updateContent();
-            updateStatus("Renamed file to " + newFile.getFileName());
-        }
-        else
-            updateStatus("Could not rename file.");
+        breadcrumbLabel.setText(breadcrumbParts[0], juce::dontSendNotification);
+        breadcrumbLabel.setVisible(true);
+        return;
     }
-    renameEditor.setVisible(false);
-    renameTarget = RenameTarget::None;
-    renamingRow = -1;
+    breadcrumbLabel.setVisible(false);
 }
 
-void SampleOrganizerEditor::cancelRename()
+void SampleOrganizerEditor::pushPathToHistory()
 {
-    renameEditor.setVisible(false);
-    renameTarget = RenameTarget::None;
-    renamingRow = -1;
+    if (!columnPath.isEmpty())
+        pathHistory.add(columnPath);
 }
 
-void SampleOrganizerEditor::revealInFinder(const juce::File& fileOrFolder)
+void SampleOrganizerEditor::goBack()
 {
-    if (fileOrFolder.exists())
+    if (pathHistory.isEmpty()) return;
+    pathForward.add(columnPath);
+    columnPath = pathHistory.getLast();
+    pathHistory.removeLast();
+    columnBrowser.setPath(columnPath);
+    updateBreadcrumb();
+    updateForwardButtonState();
+}
+
+void SampleOrganizerEditor::goForward()
+{
+    if (pathForward.isEmpty()) return;
+    pathHistory.add(columnPath);
+    columnPath = pathForward.getLast();
+    pathForward.removeLast();
+    columnBrowser.setPath(columnPath);
+    updateBreadcrumb();
+    updateForwardButtonState();
+}
+
+void SampleOrganizerEditor::PackListHoverListener::mouseMove(const juce::MouseEvent& e)
+{
+    if (!editor || e.eventComponent != &editor->packList) return;
+    int row = e.getPosition().getY() / SampleOrganizerEditor::kPackRowHeight;
+    int total = editor->packNames.size();
+    editor->setHoveredPackRow(row >= 0 && row < total ? row : -1);
+}
+
+void SampleOrganizerEditor::PackListHoverListener::mouseExit(const juce::MouseEvent& e)
+{
+    if (editor && e.eventComponent == &editor->packList)
+        editor->setHoveredPackRow(-1);
+}
+
+void SampleOrganizerEditor::setHoveredPackRow(int row)
+{
+    if (row != hoveredPackRow)
     {
-        fileOrFolder.revealToUser();
-        updateStatus("Reveal: " + fileOrFolder.getFullPathName());
+        hoveredPackRow = row;
+        packList.repaint();
     }
 }
 
-void SampleOrganizerEditor::deleteFile(const juce::File& file)
+void SampleOrganizerEditor::mouseMove(const juce::MouseEvent&)
 {
+}
+
+void SampleOrganizerEditor::mouseExit(const juce::MouseEvent&)
+{
+}
+
+void SampleOrganizerEditor::mouseDown(const juce::MouseEvent& e)
+{
+    handleBreadcrumbClick(e.getPosition().getX(), e.getPosition().getY());
+}
+
+void SampleOrganizerEditor::handleBreadcrumbClick(int x, int y)
+{
+    juce::Rectangle<int> header = getHeaderBounds();
+    if (!header.contains(x, y))
+        return;
+    int bcLeft = header.getX() + 78;
+    int bcRight = header.getRight() - 52;
+    if (x < bcLeft || x > bcRight || breadcrumbParts.isEmpty())
+        return;
+    int seg = 0;
+    int px = bcLeft;
+    juce::Font boldFont(12.0f, juce::Font::bold);
+    juce::Font plainFont(12.0f, juce::Font::plain);
+    for (int i = 0; i < breadcrumbParts.size(); ++i)
+    {
+        juce::String part = breadcrumbParts[i];
+        float w = (i == 0 ? boldFont : plainFont).getStringWidth(part);
+        if (i > 0)
+            w += plainFont.getStringWidth(" / ");
+        if (x >= px && x < px + (int)w)
+        {
+            seg = i;
+            break;
+        }
+        px += (int)w;
+        if (i < breadcrumbParts.size() - 1)
+            px += (int)plainFont.getStringWidth(" / ");
+    }
+    if (seg <= 0)
+        return;
+    pathHistory.add(columnPath);
+    while ((int)columnPath.size() > seg)
+        columnPath.removeLast();
+    columnBrowser.setPath(columnPath);
+    pathForward.clear();
+    updateBreadcrumb();
+    updateForwardButtonState();
+}
+
+void SampleOrganizerEditor::playSelectedFile()
+{
+    juce::File file = columnBrowser.getSelectedFileInLastColumn();
     if (!file.existsAsFile()) return;
-    if (file.moveToTrash())
-    {
-        refreshFileList();
-        updateStatus("Moved to trash: " + file.getFileName());
-    }
-    else
-        updateStatus("Could not delete file.");
-}
-
-void SampleOrganizerEditor::moveFileToCategory(const juce::File& file, const juce::String& categoryName)
-{
-    if (!processor.outputDirectory.isDirectory() || !file.existsAsFile()) return;
-    juce::File catDir = processor.outputDirectory.getChildFile(categoryName);
-    juce::File oneShots = catDir.getChildFile("One-Shots");
-    juce::File loops = catDir.getChildFile("Loops");
-    oneShots.createDirectory();
-    loops.createDirectory();
-    juce::String ext = file.getFileExtension();
-    juce::String baseName = file.getFileNameWithoutExtension();
-    juce::File dest = oneShots.getChildFile(baseName + ext);
-    int n = 1;
-    while (dest.existsAsFile())
-        dest = oneShots.getChildFile(baseName + "_" + juce::String(n++) + ext);
-    if (file.moveFileTo(dest))
-    {
-        refreshFolderList();
-        refreshFileList();
-        updateStatus("Moved " + file.getFileName() + " → " + categoryName);
-    }
-    else
-        updateStatus("Could not move file.");
-}
-
-void SampleOrganizerEditor::playFile(int row)
-{
-    if (row < 0 || row >= filesInSelectedCategory.size()) return;
-    juce::File file = filesInSelectedCategory[row];
     juce::String path = file.getFullPathName();
     if (path == playingFilePath)
     {
-        stopPlayback();
+        transportSource.stop();
+        transportSource.setSource(nullptr);
+        readerSource.reset();
+        playingFilePath.clear();
         return;
     }
-    stopPlayback();
+    transportSource.stop();
+    transportSource.setSource(nullptr);
+    readerSource.reset();
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
     if (!reader) return;
     readerSource.reset(new juce::AudioFormatReaderSource(reader.get(), true));
@@ -676,75 +590,43 @@ void SampleOrganizerEditor::playFile(int row)
     transportSource.setPosition(0.0);
     transportSource.start();
     playingFilePath = path;
-    updateStatus("Playing: " + file.getFileName());
-    fileList.repaint();
+    columnBrowser.repaint();
 }
 
-void SampleOrganizerEditor::stopPlayback()
+juce::Rectangle<int> SampleOrganizerEditor::getLogoPanelBounds() const
 {
-    transportSource.stop();
-    transportSource.setSource(nullptr);
-    readerSource.reset();
-    playingFilePath.clear();
-    updateStatus("Stopped");
-    fileList.repaint();
+    return juce::Rectangle<int>(0, 0, kLogoPanelWidth, kHeaderHeight);
 }
 
-void SampleOrganizerEditor::startDragFile(int row)
+juce::Rectangle<int> SampleOrganizerEditor::getPackListBounds() const
 {
-    if (row < 0 || row >= filesInSelectedCategory.size()) return;
-    juce::File file = filesInSelectedCategory[row];
-    juce::String path = file.getFullPathName();
-    juce::var desc(kFileDragPrefix + path);
-    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
-        container->startDragging(desc, this, juce::Image(), true, nullptr);
+    int contentBottom = getHeight() - kDragAreaHeight - kProcessButtonHeight;
+    return juce::Rectangle<int>(0, kHeaderHeight, kSidebarWidth, contentBottom - kHeaderHeight);
 }
 
-bool SampleOrganizerEditor::isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details)
+juce::Rectangle<int> SampleOrganizerEditor::getHeaderBounds() const
 {
-    juce::String desc = details.description.toString();
-    return desc.startsWith(kFileDragPrefix);
+    return juce::Rectangle<int>(kLogoPanelWidth + 1, 0, getWidth() - kLogoPanelWidth - 1, kHeaderHeight);
 }
 
-void SampleOrganizerEditor::itemDropped(const juce::DragAndDropTarget::SourceDetails& details)
+juce::Rectangle<int> SampleOrganizerEditor::getColumnBrowserBounds() const
 {
-    juce::String desc = details.description.toString();
-    if (!desc.startsWith(kFileDragPrefix)) return;
-    juce::String path = desc.substring(kFileDragPrefix.length());
-    juce::File file(path);
-    if (!file.existsAsFile()) return;
-    juce::Point<int> pos = details.localPosition;
-    juce::Rectangle<int> folderBounds = getFolderListBounds();
-    folderBounds.removeFromTop(24);
-    if (!folderBounds.contains(pos))
-        return;
-    int row = (pos.getY() - folderBounds.getY()) / kFinderRowHeight;
-    if (row < 0 || row >= folderNames.size()) return;
-    moveFileToCategory(file, folderNames[row]);
+    int contentTop = kHeaderHeight;
+    int contentBottom = getHeight() - kDragAreaHeight - kProcessButtonHeight;
+    return juce::Rectangle<int>(kSidebarWidth, contentTop, getWidth() - kSidebarWidth, contentBottom - contentTop);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getDropZoneBounds() const
+juce::Rectangle<int> SampleOrganizerEditor::getDragAreaBounds() const
 {
-    int finderY = 88;
-    int finderH = 320;
-    return juce::Rectangle<int>(0, finderY + finderH, getWidth(), 52);
+    int y = getHeight() - kDragAreaHeight - kProcessButtonHeight;
+    return juce::Rectangle<int>(0, y, getWidth(), kDragAreaHeight);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getFolderListBounds() const
+juce::Rectangle<int> SampleOrganizerEditor::getProcessButtonBounds() const
 {
-    int finderY = 88;
-    int finderH = 320;
-    return juce::Rectangle<int>(0, finderY, kFolderListWidth, finderH);
+    return juce::Rectangle<int>(0, getHeight() - kProcessButtonHeight, getWidth(), kProcessButtonHeight);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getFileListBounds() const
-{
-    int finderY = 88;
-    int finderH = 320;
-    return juce::Rectangle<int>(kFolderListWidth, finderY, getWidth() - kFolderListWidth, finderH);
-}
-
-// --- File drag/drop (external) ---
 bool SampleOrganizerEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
     juce::StringArray expanded = expandDroppedPaths(files);
@@ -755,7 +637,7 @@ bool SampleOrganizerEditor::isInterestedInFileDrag(const juce::StringArray& file
 
 void SampleOrganizerEditor::fileDragEnter(const juce::StringArray&, int x, int y)
 {
-    if (getDropZoneBounds().contains(x, y) && !isDragOver)
+    if (getDragAreaBounds().contains(x, y) && !isDragOver)
     {
         isDragOver = true;
         repaint();
@@ -764,7 +646,7 @@ void SampleOrganizerEditor::fileDragEnter(const juce::StringArray&, int x, int y
 
 void SampleOrganizerEditor::fileDragMove(const juce::StringArray&, int x, int y)
 {
-    bool in = getDropZoneBounds().contains(x, y);
+    bool in = getDragAreaBounds().contains(x, y);
     if (in != isDragOver) { isDragOver = in; repaint(); }
 }
 
@@ -786,5 +668,8 @@ void SampleOrganizerEditor::filesDropped(const juce::StringArray& files, int, in
         if (file.existsAsFile()) fileArray.add(file);
     }
     processor.addFiles(fileArray);
-    updateStatus(juce::String(processor.queue.size()) + " samples queued. Hit Process.");
+    queueLabel.setText(juce::String(processor.queue.size()) + " sample(s) in queue", juce::dontSendNotification);
+    queueLabel.setVisible(true);
+    dragLabel.setVisible(false);
+    repaint();
 }

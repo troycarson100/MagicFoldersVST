@@ -32,9 +32,21 @@ target_include_directories(SampleOrganizer PRIVATE
     ${Eigen3_INCLUDE_DIRS}
 )
 
+juce_add_binary_data(SampleOrganizerAssets
+    SOURCES
+        assets/DarkGreyArrowRight.svg
+        assets/GearSettingsIcon.svg
+        assets/MagicFolders_Logo_White.svg
+        assets/Plus_Icon.svg
+        assets/WhiteArrowLeft.svg
+        assets/WhiteArrowRight.svg
+)
+
 target_sources(SampleOrganizer PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp
+    SettingsOverlayComponent.cpp
+    ColumnBrowserComponent.cpp
 )
 
 target_compile_definitions(SampleOrganizer PUBLIC
@@ -44,6 +56,7 @@ target_compile_definitions(SampleOrganizer PUBLIC
 )
 
 target_link_libraries(SampleOrganizer PRIVATE
+    SampleOrganizerAssets
     juce::juce_audio_utils
     juce::juce_gui_basics
     juce::juce_dsp

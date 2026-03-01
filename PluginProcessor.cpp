@@ -89,7 +89,8 @@ juce::String SampleOrganizerProcessor::detectType(const juce::String& fn)
 
 void SampleOrganizerProcessor::processAll()
 {
-    if (!outputDirectory.isDirectory()) return;
+    juce::File targetDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
+    if (!targetDir.isDirectory()) return;
 
     categoryCounters.clear();
 
@@ -110,7 +111,7 @@ void SampleOrganizerProcessor::processAll()
         info.name = analysis.suggestedName;
         info.suggested_name = analysis.suggestedName;
         info.bpm = analysis.bpm;
-        info.key = analysis.key;
+        info.key = useProjectKey ? projectKey : analysis.key;
         copyToFolder(info);
         processed.add(info);
     }
@@ -122,7 +123,8 @@ void SampleOrganizerProcessor::processAll()
 
 bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
 {
-    juce::File folder = outputDirectory
+    juce::File baseDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
+    juce::File folder = baseDir
         .getChildFile(info.category)
         .getChildFile(info.type == "Loop" ? "Loops" : "One-Shots");
 

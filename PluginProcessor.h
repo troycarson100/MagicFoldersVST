@@ -60,6 +60,16 @@ public:
     int projectBPM = 120;
     juce::String defaultGenre = "Unknown";
     bool useHostBpm = false;
+    bool useProjectKey = true;
+
+    /** 0 = Category_Key_BPM_Index, 1 = Index_Category_Key_BPM, 2 = Custom prefix + Index */
+    int namingFormat = 0;
+    juce::String customPrefix;
+    bool overwriteDuplicates = false;
+    bool themeLight = true;
+
+    /** When set by the editor, processAll() writes here instead of outputDirectory. */
+    juce::File currentProcessDirectory;
 
     juce::Array<SampleInfo> queue;
     juce::Array<SampleInfo> processed;
