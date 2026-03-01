@@ -1,10 +1,11 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "FinderTheme.h"
 
 class SampleOrganizerEditor : public juce::AudioProcessorEditor,
-                               public juce::DragAndDropTarget,
-                               public juce::FileDragAndDropTarget
+                              public juce::FileDragAndDropTarget,
+                              public juce::DragAndDropTarget
 {
 public:
     SampleOrganizerEditor(SampleOrganizerProcessor&);
@@ -12,66 +13,116 @@ public:
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
 
-    // File drag and drop
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragMove(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
-    // Drag and drop (generic)
-    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails&) override { return false; }
-    void itemDropped(const juce::DragAndDropTarget::SourceDetails&) override {}
+    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDropped(const juce::DragAndDropTarget::SourceDetails& details) override;
 
 private:
     SampleOrganizerProcessor& processor;
 
-    // UI Components
+    // --- Top bar ---
     juce::Label titleLabel;
-    juce::Label dropZoneLabel;
-    juce::Label statusLabel;
+    juce::Label outputPathLabel;
+    juce::TextButton folderBtn;
 
-    juce::TextButton chooseOutputBtn;
+    // --- Metadata bar ---
+    juce::ComboBox keySelector;
+    juce::TextButton bpmDownBtn;
+    juce::Label bpmLabel;
+    juce::TextButton bpmUpBtn;
+    juce::TextEditor genreInput;
     juce::TextButton processBtn;
     juce::TextButton clearBtn;
-    juce::TextButton addFolderBtn;
-    juce::TextButton openFolderBtn;
 
-    juce::ComboBox keySelector;
-    juce::Label keyLabel;
+    // --- Finder: folder list (left) ---
+    juce::ListBox folderList;
+    juce::StringArray folderNames;
+    juce::Array<juce::File> categoryDirs;  // same order as folderNames
+    int selectedFolderIndex = -1;
+    int dragOverFolderIndex = -1;
 
-    juce::Slider bpmSlider;
-    juce::Label bpmLabel;
-    juce::ToggleButton useHostBpmToggle;
+    // --- Finder: file list (right) ---
+    juce::ListBox fileList;
+    juce::Array<juce::File> filesInSelectedCategory;  // full paths
+    int selectedFileIndex = -1;
+    juce::String playingFilePath;  // full path of file being previewed
+    int fileDragStartRow = -1;     // for starting drag from file list
 
-    juce::TextEditor genreInput;
-    juce::Label genreLabel;
+    // --- Rename state ---
+    enum class RenameTarget { None, Folder, File };
+    RenameTarget renameTarget = RenameTarget::None;
+    int renamingRow = -1;
+    juce::String renameInitialValue;
+    juce::TextEditor renameEditor;
 
-    juce::ListBox sampleList;
-    juce::StringArray sampleListItems;
-
-    class SampleListModel : public juce::ListBoxModel
-    {
-    public:
-        juce::StringArray items;
-        int getNumRows() override { return items.size(); }
-        void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override
-        {
-            if (selected)
-                g.fillAll(juce::Colour(0xff2d2d2d));
-            g.setColour(juce::Colours::white.withAlpha(0.85f));
-            g.setFont(12.0f);
-            g.drawText(items[row], 10, 0, w - 10, h, juce::Justification::centredLeft);
-        }
-    };
-
-    SampleListModel listModel;
-
+    // --- Drop zone & status ---
+    juce::Label dropZoneLabel;
+    juce::Label statusLabel;
     bool isDragOver = false;
 
-    void refreshList();
+    // --- Playback ---
+    juce::AudioDeviceManager deviceManager;
+    juce::AudioSourcePlayer sourcePlayer;
+    juce::AudioTransportSource transportSource;
+    juce::AudioFormatManager formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+
+    // --- List models (reference editor data) ---
+    class FolderListModel : public juce::ListBoxModel
+    {
+    public:
+        FolderListModel(SampleOrganizerEditor& e) : editor(e) {}
+        int getNumRows() override;
+        void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override;
+        void listBoxItemClicked(int row, const juce::MouseEvent&) override;
+        void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
+    private:
+        SampleOrganizerEditor& editor;
+    };
+    class FileListModel : public juce::ListBoxModel
+    {
+    public:
+        FileListModel(SampleOrganizerEditor& e) : editor(e) {}
+        int getNumRows() override;
+        void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override;
+        void listBoxItemClicked(int row, const juce::MouseEvent&) override;
+        void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
+    private:
+        SampleOrganizerEditor& editor;
+    };
+    FolderListModel folderListModel;
+    FileListModel fileListModel;
+
+    // --- Helpers ---
+    void refreshFolderList();
+    void refreshFileList();
     void updateStatus(const juce::String& msg);
+    void showFolderContextMenu(int row, int screenX, int screenY);
+    void showFileContextMenu(int row, int screenX, int screenY);
+    void startRenameFolder(int row);
+    void startRenameFile(int row);
+    void commitRename();
+    void cancelRename();
+    void revealInFinder(const juce::File& fileOrFolder);
+    void deleteFile(const juce::File& file);
+    void moveFileToCategory(const juce::File& file, const juce::String& categoryName);
+    void playFile(int row);
+    void stopPlayback();
+    void startDragFile(int row);
+    juce::Rectangle<int> getDropZoneBounds() const;
+    juce::Rectangle<int> getFolderListBounds() const;
+    juce::Rectangle<int> getFileListBounds() const;
+
+    static constexpr int kFolderListWidth = 200;
+    static constexpr int kFinderRowHeight = 26;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleOrganizerEditor)
 };
