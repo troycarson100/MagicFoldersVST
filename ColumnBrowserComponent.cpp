@@ -511,9 +511,11 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         return;
     int row = e.getPosition().getY() / kRowHeight;
     const auto& items = columnItems.getReference(col);
-    // Click in empty area below folders → show "(+ new folder)" option (Finder-style)
+    // Right-click only in empty area below folders → show "(+ new folder)" (left-click does nothing)
     if (row >= items.size())
     {
+        if (!e.mods.isPopupMenu())
+            return;
         if (getParentForColumn(col).isDirectory())
         {
             juce::PopupMenu m;
@@ -542,6 +544,8 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
         bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
         juce::String revealLabel = isMac ? "Reveal in Finder" : "Reveal in File Explorer";
         m.addItem(2, revealLabel);
+        m.addSeparator();
+        m.addItem(3, "Delete");
         auto opts = juce::PopupMenu::Options()
             .withParentComponent(getTopLevelComponent())
             .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
@@ -551,6 +555,25 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
                     startInlineRename(col, row);
                 else if (result == 2 && f.exists())
                     f.revealToUser();
+                else if (result == 3 && f.exists())
+                {
+                    if (f == rootFolder)
+                        return;
+                    f.moveToTrash();
+                    if (path.contains(f))
+                    {
+                        juce::Array<juce::File> newPath;
+                        for (const auto& p : path)
+                        {
+                            if (p == f) break;
+                            newPath.add(p);
+                        }
+                        setPath(newPath);
+                    }
+                    refreshColumns();
+                    if (onPathChanged)
+                        onPathChanged();
+                }
             });
         return;
     }

@@ -112,6 +112,15 @@ static bool isAudioPath(const juce::String& path)
 juce::StringArray SampleOrganizerEditor::expandDroppedPaths(const juce::StringArray& list) { return ::expandDroppedPaths(list); }
 bool SampleOrganizerEditor::isAudioPath(const juce::String& path) { return ::isAudioPath(path); }
 
+// --- PackListBox (double-click to rename) ---
+void SampleOrganizerEditor::PackListBox::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    int row = getRowContainingPosition(e.getPosition().getX(), e.getPosition().getY());
+    if (onDoubleClickRow && row >= 0)
+        onDoubleClickRow(row);
+    juce::ListBox::mouseDoubleClick(e);
+}
+
 // --- PackListModel ---
 int SampleOrganizerEditor::PackListModel::getNumRows()
 {
@@ -137,14 +146,9 @@ void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graph
         editor.forwardArrowDimmedDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
 }
 
-void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent& e)
+void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
 {
     if (row < 0 || row >= editor.packNames.size()) return;
-    if (e.getNumberOfClicks() >= 2)
-    {
-        editor.startPackInlineRename(row);
-        return;
-    }
     editor.selectedPackIndex = row;
     editor.columnPath.clear();
     editor.pathHistory.clear();
@@ -181,10 +185,13 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
 
     packList.setModel(&packListModel);
     packList.setRowHeight(kPackRowHeight);
+    packList.onDoubleClickRow = [this](int row) { tryRenamePack(row); };
     packList.setColour(juce::ListBox::backgroundColourId, FinderTheme::sidebarDarkBar);
     packListHoverListener = std::make_unique<PackListHoverListener>();
     packListHoverListener->editor = this;
     packList.addMouseListener(packListHoverListener.get(), true);
+    if (auto* vp = packList.getViewport())
+        vp->addMouseListener(packListHoverListener.get(), true);
     packList.setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
     packList.setOutlineThickness(0);
     addAndMakeVisible(packList);
@@ -679,12 +686,32 @@ void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEv
         });
         return;
     }
-    if (!e.mods.isRightButtonDown()) return;
+    if (!e.mods.isPopupMenu())
+    {
+        uint32 now = (uint32) juce::Time::getMillisecondCounter();
+        uint32 dt = now - editor->lastPackClickTime;
+        if (row == editor->lastPackClickRow && dt >= editor->kPackDoubleClickMinMs && dt < editor->kPackDoubleClickMaxMs)
+        {
+            editor->lastPackClickRow = -1;
+            int rowToEdit = row;
+            SampleOrganizerEditor* ed = this->editor;
+            juce::Timer::callAfterDelay(250, [ed, rowToEdit]() {
+                if (ed && ed->isVisible())
+                    ed->tryRenamePack(rowToEdit);
+            });
+            return;
+        }
+        editor->lastPackClickRow = row;
+        editor->lastPackClickTime = now;
+        return;
+    }
     juce::File packDir = editor->packDirs[row];
     juce::PopupMenu m;
     m.addItem(1, "Rename");
     bool isMac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
     m.addItem(2, isMac ? "Reveal in Finder" : "Reveal in File Explorer");
+    m.addSeparator();
+    m.addItem(3, "Delete");
     auto opts = juce::PopupMenu::Options()
         .withParentComponent(editor->getTopLevelComponent())
         .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
@@ -695,6 +722,22 @@ void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEv
             editor->startPackInlineRename(row);
         else if (result == 2 && packDir.exists())
             packDir.revealToUser();
+        else if (result == 3 && packDir.exists())
+        {
+            packDir.moveToTrash();
+            editor->refreshPackList();
+            editor->columnPath.clear();
+            editor->pathHistory.clear();
+            editor->pathForward.clear();
+            if (editor->selectedPackIndex >= 0 && editor->selectedPackIndex < editor->packDirs.size())
+                editor->columnBrowser.setRootFolder(editor->packDirs[editor->selectedPackIndex]);
+            else
+                editor->columnBrowser.setRootFolder(juce::File());
+            editor->columnBrowser.setPath(editor->columnPath);
+            editor->updateBreadcrumb();
+            editor->updateForwardButtonState();
+            editor->packList.repaint();
+        }
     });
 }
 
@@ -735,6 +778,10 @@ void SampleOrganizerEditor::startPackInlineRename(int row)
     packRenameEditor.toFront(true);
     packRenameEditor.selectAll();
     packRenameEditor.grabKeyboardFocus();
+    juce::Timer::callAfterDelay(80, [this]() {
+        if (editingPackRow >= 0 && packRenameEditor.isVisible())
+            packRenameEditor.grabKeyboardFocus();
+    });
 }
 
 void SampleOrganizerEditor::commitPackRename()

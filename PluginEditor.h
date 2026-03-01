@@ -39,7 +39,12 @@ private:
     std::unique_ptr<juce::Drawable> plusDrawable;
     std::unique_ptr<juce::Drawable> arrowRightDrawable;
     juce::DrawableButton plusBtn { "Plus", juce::DrawableButton::ImageFitted };
-    juce::ListBox packList;
+    struct PackListBox : juce::ListBox
+    {
+        void mouseDoubleClick(const juce::MouseEvent& e) override;
+        std::function<void(int)> onDoubleClickRow;
+    };
+    PackListBox packList;
     juce::TextEditor packRenameEditor;
     int editingPackRow = -1;
     juce::StringArray packNames;
@@ -61,6 +66,10 @@ private:
     static constexpr int kPackRowHeight = 34;
     static constexpr int kPackPaddingH = 14;
     static constexpr int kPackPaddingV = 10;
+    int lastPackClickRow = -1;
+    uint32 lastPackClickTime = 0;
+    static constexpr uint32 kPackDoubleClickMinMs = 80;   // ignore duplicate events from same physical click
+    static constexpr uint32 kPackDoubleClickMaxMs = 400;
 
     // Header
     std::unique_ptr<juce::Drawable> backArrowDrawable;
