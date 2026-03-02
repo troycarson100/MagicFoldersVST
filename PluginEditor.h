@@ -9,7 +9,8 @@
 class SampleOrganizerEditor : public juce::AudioProcessorEditor,
                               public juce::FileDragAndDropTarget,
                               public juce::DragAndDropContainer,
-                              public juce::KeyListener
+                              public juce::KeyListener,
+                              public juce::Timer
 {
 public:
     SampleOrganizerEditor(SampleOrganizerProcessor&);
@@ -129,6 +130,32 @@ private:
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::String playingFilePath;
+    double previewLengthSeconds = 0.0;
+
+    struct AudioPreviewStrip : juce::Component
+    {
+        struct PlayPauseButton : juce::Button
+        {
+            bool showingPlay = true;
+            PlayPauseButton() : juce::Button({}) {}
+            void paintButton(juce::Graphics& g, bool, bool) override;
+        };
+        SampleOrganizerEditor* editor = nullptr;
+        PlayPauseButton playPauseBtn;
+        juce::Slider scrubSlider;
+        std::unique_ptr<juce::LookAndFeel> scrubBarLook;
+        AudioPreviewStrip();
+        ~AudioPreviewStrip() override;
+        void resized() override;
+        void paint(juce::Graphics& g) override;
+        void setPlayPauseLabel(bool playing);
+        void updateScrubFromTransport();
+    };
+    AudioPreviewStrip audioPreviewStrip;
+    void showAudioPreview(int row);
+    void hideAudioPreview();
+    void collapseAudioPreview();
+    void timerCallback() override;
 
     void refreshPackList();
     void updateBreadcrumb();

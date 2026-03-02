@@ -40,6 +40,8 @@ juce_add_binary_data(SampleOrganizerAssets
         assets/GearSettingsIcon.png
         assets/GearSettingsIcon.svg
         assets/MagicFolders_Logo_White.svg
+        assets/Pause.svg
+        assets/Play.svg
         assets/Plus_Icon.svg
         assets/WhiteArrowLeft.svg
         assets/WhiteArrowRight.svg

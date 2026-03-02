@@ -14,6 +14,8 @@ public:
         juce::String key;
         int bpm = 0;
         juce::String melodicVibe;  // Pad, Pluck, Lead, Keys (only set when category == Melodic)
+        /** True if audio is silent/near-silent (e.g. blank Ableton slot); skip copying. */
+        bool isBlank = false;
     };
 
     struct SampleInfo
@@ -33,9 +35,9 @@ public:
     SampleOrganizerProcessor();
     ~SampleOrganizerProcessor() override;
 
-    void prepareToPlay(double, int) override {}
-    void releaseResources() override {}
-    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -67,6 +69,8 @@ public:
     /** 0 = Category_Key_BPM_Index, 1 = Index_Category_Key_BPM, 2 = Custom prefix + Index */
     int namingFormat = 0;
     juce::String customPrefix;
+    /** When true, suggested names use random adjectives (e.g. Big Kick, Liquid Snare) while keeping category/BPM/key. */
+    bool generateFunNames = false;
     bool overwriteDuplicates = false;
     bool themeLight = true;
 
@@ -100,6 +104,19 @@ public:
 
     std::map<juce::String, int> categoryCounters;
 
+    // Preview playback (uses host/standalone audio output)
+    void setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds);
+    void startPreview();
+    void stopPreview();
+    juce::AudioTransportSource* getPreviewTransport() { return &previewTransport; }
+    double getPreviewLengthSeconds() const { return previewLengthSeconds; }
+
 private:
+    double previewSampleRate = 44100;
+    int previewBlockSize = 512;
+    juce::TimeSliceThread previewReadAheadThread { "Preview read-ahead" };
+    juce::AudioTransportSource previewTransport;
+    std::unique_ptr<juce::AudioFormatReaderSource> previewReaderSource;
+    double previewLengthSeconds = 0.0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleOrganizerProcessor)
 };

@@ -37,6 +37,7 @@ private:
     SettingsDropdownComponent keyDropdown;
 
     SettingsDropdownComponent namingFormatDropdown;
+    SettingsToggleComponent generateFunNamesToggle;
     juce::Label customPrefixLabel;
     juce::TextEditor customPrefixEditor;
 

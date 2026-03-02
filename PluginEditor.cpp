@@ -259,6 +259,26 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     };
     columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
     columnBrowser.onKeyLeft = [this] { goBack(); };
+    columnBrowser.onFilePreviewToggled = [this](int row, bool expand) {
+        if (expand)
+        {
+            int lastCol = columnBrowser.getPath().isEmpty() ? 0 : (int)columnBrowser.getPath().size();
+            columnBrowser.setSelectedRowInColumn(lastCol, row);
+            columnBrowser.setExpandedPreviewRow(row);
+            playSelectedFile();
+            columnBrowser.setPlayingFilePath(playingFilePath);
+            startTimer(100);
+        }
+        else
+        {
+            processor.stopPreview();
+            playingFilePath.clear();
+            columnBrowser.setPlayingFilePath({});
+            columnBrowser.setExpandedPreviewRow(-1);
+            hideAudioPreview();
+            stopTimer();
+        }
+    };
     columnBrowser.onPathChanged = [this] {
         columnPath = columnBrowser.getPath();
         updateBreadcrumb();
@@ -271,6 +291,10 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     columnViewport.setViewedComponent(&columnBrowser, false);
     columnViewport.setScrollBarsShown(true, true);
     addAndMakeVisible(columnViewport);
+
+    audioPreviewStrip.editor = this;
+    audioPreviewStrip.setVisible(false);  // no popup strip – play/pause is inline only
+    addChildComponent(audioPreviewStrip);
 
     columnPlaceholderLabel.setText("", juce::dontSendNotification);
     columnPlaceholderLabel.setColour(juce::Label::textColourId, textCharcoal);
@@ -293,35 +317,42 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     batchPlusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
     batchPlusBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
     batchPlusBtn.onClick = [this] {
-        if (!processor.batchPlusFolder.isDirectory())
-        {
-            processor.tryAutoDetectAbletonSamplesFolder();
+        // Disable immediately so the click registers and we ignore repeat clicks while scanning
+        batchPlusBtn.setEnabled(false);
+        repaint();
+        // Defer heavy work so the button can repaint as disabled before we block on the scan
+        juce::Timer::callAfterDelay(1, [this] {
             if (!processor.batchPlusFolder.isDirectory())
             {
-                breadcrumbLabel.setVisible(true);
-                breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
-                settingsOverlay->syncFromProcessor();
-                settingsOverlay->setVisible(true);
-                settingsOverlay->toFront(true);
-                return;
+                processor.tryAutoDetectAbletonSamplesFolder();
+                if (!processor.batchPlusFolder.isDirectory())
+                {
+                    breadcrumbLabel.setVisible(true);
+                    breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
+                    settingsOverlay->syncFromProcessor();
+                    settingsOverlay->setVisible(true);
+                    settingsOverlay->toFront(true);
+                    batchPlusBtn.setEnabled(true);
+                    return;
+                }
             }
-            batchPlusBtn.setEnabled(true);
-        }
-        processor.clearQueue();
-        processor.addFilesFromFolderRecursive(processor.batchPlusFolder);
-        selectedQueueIndices.clear();
-        juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
-        juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
-        const int kQueueLineHeight = 18;
-        const int kQueueHeaderHeight = 20;
-        int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
-        queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
-        queueViewport.setVisible(true);
-        dragLabel.setVisible(false);
-        queueLabel.setVisible(false);
-        queueViewport.setBounds(queueViewportBounds);
-        queueListContent.repaint();
-        repaint();
+            processor.clearQueue();
+            processor.addFilesFromFolderRecursive(processor.batchPlusFolder);
+            selectedQueueIndices.clear();
+            juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
+            juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
+            const int kQueueLineHeight = 18;
+            const int kQueueHeaderHeight = 20;
+            int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
+            queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
+            queueViewport.setVisible(true);
+            dragLabel.setVisible(false);
+            queueLabel.setVisible(false);
+            queueViewport.setBounds(queueViewportBounds);
+            queueListContent.repaint();
+            repaint();
+            batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
+        });
     };
     // Auto-detect only runs when user clicks Batch+ (not on load), to avoid freezing host and Apple Music permission
     batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
@@ -407,6 +438,7 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
 {
     if (packListHoverListener)
         removeMouseListener(packListHoverListener.get());
+    processor.stopPreview();
     transportSource.setSource(nullptr);
     readerSource.reset();
     sourcePlayer.setSource(nullptr);
@@ -575,6 +607,16 @@ bool SampleOrganizerEditor::keyPressed(const juce::KeyPress& key, juce::Componen
     {
         undoLastQueueRemove();
         return true;
+    }
+    // Forward arrow keys and space to column browser
+    if (!settingsOverlay->isVisible() && (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey
+            || key == juce::KeyPress::upKey || key == juce::KeyPress::downKey || key == juce::KeyPress::spaceKey))
+    {
+        if (columnBrowser.keyPressed(key))
+        {
+            columnBrowser.grabKeyboardFocus();
+            return true;
+        }
     }
     return false;
 }
@@ -860,19 +902,28 @@ void SampleOrganizerEditor::updateBreadcrumb()
 
 void SampleOrganizerEditor::pushPathToHistory()
 {
-    if (!columnPath.isEmpty())
-        pathHistory.add(columnPath);
+    pathHistory.add(columnPath);
 }
 
 void SampleOrganizerEditor::goBack()
 {
-    if (pathHistory.isEmpty()) return;
-    pathForward.add(columnPath);
-    columnPath = pathHistory.getLast();
-    pathHistory.removeLast();
+    if (!pathHistory.isEmpty())
+    {
+        pathForward.add(columnPath);
+        columnPath = pathHistory.getLast();
+        pathHistory.removeLast();
+    }
+    else if (!columnPath.isEmpty())
+    {
+        pathForward.add(columnPath);
+        columnPath.clear();
+    }
+    else
+        return;
     columnBrowser.setPath(columnPath);
     updateBreadcrumb();
     updateForwardButtonState();
+    repaint();
 }
 
 void SampleOrganizerEditor::goForward()
@@ -884,6 +935,7 @@ void SampleOrganizerEditor::goForward()
     columnBrowser.setPath(columnPath);
     updateBreadcrumb();
     updateForwardButtonState();
+    repaint();
 }
 
 void SampleOrganizerEditor::PackListHoverListener::mouseMove(const juce::MouseEvent& e)
@@ -1152,26 +1204,183 @@ void SampleOrganizerEditor::playSelectedFile()
     juce::String path = file.getFullPathName();
     if (path == playingFilePath)
     {
-        transportSource.stop();
-        transportSource.setSource(nullptr);
-        readerSource.reset();
+        processor.stopPreview();
         playingFilePath.clear();
         return;
     }
-    transportSource.stop();
-    transportSource.setSource(nullptr);
-    readerSource.reset();
+    processor.stopPreview();
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
     if (!reader) return;
-    readerSource.reset(new juce::AudioFormatReaderSource(reader.get(), true));
+    double fileSampleRate = juce::jmax(1.0, reader->sampleRate);
+    previewLengthSeconds = reader->lengthInSamples / fileSampleRate;
+    if (previewLengthSeconds <= 0.0) previewLengthSeconds = 1.0;
+    auto source = std::make_unique<juce::AudioFormatReaderSource>(reader.get(), true);
     reader.release();
-    if (auto* device = deviceManager.getCurrentAudioDevice())
-        transportSource.prepareToPlay(device->getCurrentBufferSizeSamples(), device->getCurrentSampleRate());
-    transportSource.setSource(readerSource.get(), 0, nullptr);
-    transportSource.setPosition(0.0);
-    transportSource.start();
+    processor.setPreviewSource(std::move(source), fileSampleRate, previewLengthSeconds);
+    processor.startPreview();
     playingFilePath = path;
     columnBrowser.repaint();
+}
+
+void SampleOrganizerEditor::AudioPreviewStrip::PlayPauseButton::paintButton(juce::Graphics& g, bool highlighted, bool)
+{
+    g.fillAll(FinderTheme::topBar);
+    if (highlighted)
+        g.fillAll(FinderTheme::topBar.brighter(0.1f));
+    g.setColour(FinderTheme::textOnDark);
+    auto b = getLocalBounds().reduced(8).toFloat();
+    juce::Path path;
+    if (showingPlay)
+    {
+        path.addTriangle(b.getX(), b.getY(), b.getX(), b.getBottom(), b.getRight(), b.getCentreY());
+    }
+    else
+    {
+        float w = juce::jmax(2.0f, b.getWidth() * 0.25f);
+        path.addRoundedRectangle(b.getX(), b.getY(), w, b.getHeight(), 1.0f);
+        path.addRoundedRectangle(b.getRight() - w, b.getY(), w, b.getHeight(), 1.0f);
+    }
+    g.fillPath(path);
+}
+
+namespace
+{
+    struct ScrubBarLookAndFeel : juce::LookAndFeel_V4
+    {
+        void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
+                             float /*sliderPos*/, float /*minSliderPos*/, float /*maxSliderPos*/,
+                             juce::Slider::SliderStyle /*style*/, juce::Slider& slider) override
+        {
+            const float corner = 2.0f;
+            auto full = juce::Rectangle<float>(float(x), float(y), float(width), float(height));
+            auto bar = full.reduced(1.0f); // inset so white background shows
+            const double val = slider.getValue();
+            const double minVal = slider.getMinimum();
+            const double maxVal = slider.getMaximum();
+            const double range = juce::jmax(0.001, maxVal - minVal);
+            const float fillRatio = (float)((val - minVal) / range);
+
+            g.setColour(juce::Colour(0xffffffff)); // white background
+            g.fillRoundedRectangle(full, corner);
+            g.setColour(juce::Colour(0xffE0E0E0)); // light grey track
+            g.fillRoundedRectangle(bar, corner);
+            if (fillRatio > 0.0f)
+            {
+                auto fillBar = bar.withWidth(bar.getWidth() * fillRatio);
+                g.setColour(FinderTheme::accent); // blue fill
+                g.fillRoundedRectangle(fillBar, corner);
+            }
+        }
+
+        void drawLinearSliderThumb(juce::Graphics&, int /*x*/, int /*y*/, int /*width*/, int /*height*/,
+                                  float /*sliderPos*/, float /*minSliderPos*/, float /*maxSliderPos*/,
+                                  juce::Slider::SliderStyle /*style*/, juce::Slider&) override
+        {
+            // No thumb – progress shown only by fill
+        }
+    };
+}
+
+SampleOrganizerEditor::AudioPreviewStrip::AudioPreviewStrip()
+{
+    scrubBarLook = std::make_unique<ScrubBarLookAndFeel>();
+    playPauseBtn.onClick = [this] {
+        if (!editor) return;
+        if (editor->playingFilePath.isEmpty()) return;
+        auto* transport = editor->processor.getPreviewTransport();
+        if (!transport) return;
+        if (transport->isPlaying())
+        {
+            transport->stop();
+            setPlayPauseLabel(false);
+        }
+        else
+        {
+            transport->start();
+            setPlayPauseLabel(true);
+        }
+    };
+    addAndMakeVisible(playPauseBtn);
+    scrubSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    scrubSlider.setLookAndFeel(scrubBarLook.get());
+    scrubSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+    scrubSlider.setRange(0.0, 1.0);
+    scrubSlider.onValueChange = [this] {
+        if (!editor) return;
+        if (auto* transport = editor->processor.getPreviewTransport())
+            transport->setPosition(scrubSlider.getValue());
+    };
+    addAndMakeVisible(scrubSlider);
+    setOpaque(true);
+}
+
+SampleOrganizerEditor::AudioPreviewStrip::~AudioPreviewStrip()
+{
+    scrubSlider.setLookAndFeel(nullptr);
+}
+
+void SampleOrganizerEditor::AudioPreviewStrip::resized()
+{
+    auto r = getLocalBounds().reduced(8);
+    const int btnW = 24;
+    playPauseBtn.setBounds(r.removeFromLeft(btnW));
+    scrubSlider.setBounds(r.reduced(4, 6));
+}
+
+void SampleOrganizerEditor::AudioPreviewStrip::paint(juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+    g.setColour(FinderTheme::topBar);
+    g.fillRoundedRectangle(bounds, 5.0f);
+    g.setColour(FinderTheme::settingsDivider);
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 5.0f, 1.0f);
+}
+
+void SampleOrganizerEditor::AudioPreviewStrip::setPlayPauseLabel(bool playing)
+{
+    playPauseBtn.showingPlay = !playing;
+    playPauseBtn.repaint();
+}
+
+void SampleOrganizerEditor::AudioPreviewStrip::updateScrubFromTransport()
+{
+    if (!editor) return;
+    if (auto* transport = editor->processor.getPreviewTransport())
+        scrubSlider.setValue(transport->getCurrentPosition(), juce::dontSendNotification);
+}
+
+void SampleOrganizerEditor::showAudioPreview(int row)
+{
+    (void)row;
+    // No popup strip – playback is controlled only by the inline play/pause icon next to each sample.
+    // Strip is kept hidden; do not call setVisible(true) here.
+}
+
+void SampleOrganizerEditor::hideAudioPreview()
+{
+    audioPreviewStrip.setVisible(false);
+}
+
+void SampleOrganizerEditor::collapseAudioPreview()
+{
+    columnBrowser.setExpandedPreviewRow(-1);
+    columnBrowser.setPlayingFilePath({});
+    processor.stopPreview();
+    playingFilePath.clear();
+    hideAudioPreview();
+    stopTimer();
+    columnBrowser.repaint();
+}
+
+void SampleOrganizerEditor::timerCallback()
+{
+    auto* transport = processor.getPreviewTransport();
+    if (transport && !transport->isPlaying() && !playingFilePath.isEmpty())
+    {
+        playingFilePath.clear();
+        columnBrowser.setPlayingFilePath({});
+        columnBrowser.setExpandedPreviewRow(-1);
+    }
 }
 
 juce::Rectangle<int> SampleOrganizerEditor::getLogoPanelBounds() const

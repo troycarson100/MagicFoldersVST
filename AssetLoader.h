@@ -39,6 +39,16 @@ struct AssetLoader
         return juce::Drawable::createFromImageData(BinaryData::FolderDarkGrey_Icon_svg, BinaryData::FolderDarkGrey_Icon_svgSize);
     }
 
+    static std::unique_ptr<juce::Drawable> getPlayIcon()
+    {
+        return juce::Drawable::createFromImageData(BinaryData::Play_svg, BinaryData::Play_svgSize);
+    }
+
+    static std::unique_ptr<juce::Drawable> getPauseIcon()
+    {
+        return juce::Drawable::createFromImageData(BinaryData::Pause_svg, BinaryData::Pause_svgSize);
+    }
+
     /** Gear icon from the PNG asset (use for settings button). */
     static std::unique_ptr<juce::Drawable> getGearSettingsIconPng()
     {

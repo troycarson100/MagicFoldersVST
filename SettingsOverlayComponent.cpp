@@ -164,6 +164,9 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
         updateCustomPrefixVisibility();
     };
     addAndMakeVisible(namingFormatDropdown);
+    generateFunNamesToggle.setButtonText("Generate Names");
+    generateFunNamesToggle.onClick = [this] { processor.generateFunNames = generateFunNamesToggle.getToggleState(); };
+    addAndMakeVisible(generateFunNamesToggle);
     customPrefixLabel.setText("Custom Prefix", juce::dontSendNotification);
     customPrefixLabel.setColour(juce::Label::textColourId, textCharcoal);
     customPrefixLabel.setFont(FinderTheme::interFont(12.0f));
@@ -198,6 +201,7 @@ SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& pro
     content.addAndMakeVisible(autoDetectKeyToggle);
     content.addAndMakeVisible(keyDropdown);
     content.addAndMakeVisible(namingFormatDropdown);
+    content.addAndMakeVisible(generateFunNamesToggle);
     content.addAndMakeVisible(customPrefixLabel);
     content.addAndMakeVisible(customPrefixEditor);
     content.addAndMakeVisible(behaviorSectionLabel);
@@ -216,6 +220,7 @@ void SettingsOverlayComponent::syncFromProcessor()
     int keyIndex = getKeyList().indexOf(processor.projectKey);
     keyDropdown.setSelectedIndex(keyIndex >= 0 ? keyIndex : 0, juce::dontSendNotification);
     namingFormatDropdown.setSelectedIndex(juce::jlimit(0, 2, processor.namingFormat), juce::dontSendNotification);
+    generateFunNamesToggle.setToggleState(processor.generateFunNames, juce::dontSendNotification);
     customPrefixEditor.setText(processor.customPrefix, juce::dontSendNotification);
     overwriteDuplicatesToggle.setToggleState(processor.overwriteDuplicates, juce::dontSendNotification);
     if (processor.outputDirectory.isDirectory()) {
@@ -274,7 +279,8 @@ void SettingsOverlayComponent::paint(juce::Graphics& g)
 
 void SettingsOverlayComponent::resized()
 {
-    closeBtn.setBounds(getWidth() - 44, (kHeaderHeight - 28) / 2, 28, 28);
+    constexpr int kCloseBtnSize = 18;  // 35% smaller than original 28
+    closeBtn.setBounds(getWidth() - kCloseBtnSize - 16, (kHeaderHeight - kCloseBtnSize) / 2, kCloseBtnSize, kCloseBtnSize);
 
     const int labelW = 160;
     const int controlW = 280;
@@ -283,7 +289,6 @@ void SettingsOverlayComponent::resized()
     juce::Array<juce::Rectangle<int>> sectionRects;
 
     scrollViewport.setBounds(0, kHeaderHeight, getWidth(), getHeight() - kHeaderHeight);
-    content.setSize(cw, 620);
 
     constexpr int kExtraPad = 14;
 
@@ -335,6 +340,8 @@ void SettingsOverlayComponent::resized()
     sectionTop = y;
     namingFormatDropdown.setBounds(kContentPad + 12, y, controlW, 32);
     y += 32 + kExtraPad;
+    generateFunNamesToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
+    y += 38;
     customPrefixLabel.setBounds(kContentPad + 12, y, labelW, kRowHeight);
     y += kRowHeight + 4;
     customPrefixEditor.setBounds(kContentPad + 12, y, controlW, 32);
@@ -350,5 +357,8 @@ void SettingsOverlayComponent::resized()
     y += 44;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));
 
+    const int kBottomPadding = 80;
+    int contentHeight = juce::jmax(scrollViewport.getHeight() + 1, y + kBottomPadding);
+    content.setSize(cw, contentHeight);
     content.setSectionRects(sectionRects);
 }

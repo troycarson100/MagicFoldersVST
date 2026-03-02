@@ -35,12 +35,23 @@ public:
     juce::File getSelectedFileInLastColumn() const;  // selected item in last column if it's a file
     /** Total width needed to show all columns and dividers (for viewport content size). */
     int getTotalContentWidth() const;
+    /** Row rectangle in local coordinates (for positioning preview strip). */
+    juce::Rectangle<int> getRowBoundsInColumn(int column, int row) const;
+    /** Row in last column that is expanded for audio preview (-1 if none). */
+    int getExpandedPreviewRow() const { return expandedPreviewRow; }
+    void setExpandedPreviewRow(int row) { expandedPreviewRow = row; repaint(); }
+    /** Path of file currently playing (for drawing pause on that row). */
+    void setPlayingFilePath(const juce::String& path);
+    /** Set selected row in a column (for preview: ensure last column selection matches expanded row). */
+    void setSelectedRowInColumn(int column, int row);
 
     std::function<void(int column, int row)> onFolderSelected;
     std::function<void(int row)> onFileSelected;
     std::function<void()> onKeyLeft;  // back (e.g. when user presses Left)
     std::function<void()> onPathChanged;  // called after rename so parent can sync
     std::function<void()> onColumnWidthsChanged;  // called after divider drag so parent can update content size
+    /** (row in last column, expand true = show/play, false = hide/stop) */
+    std::function<void(int row, bool expand)> onFilePreviewToggled;
 
     static constexpr int kMinColumnWidth = 80;
     static constexpr int kDividerWidth = 1;
@@ -71,12 +82,17 @@ private:
     int dropHighlightRow = -1;
     int editingColumn = -1;
     int editingRow = -1;
+    int expandedPreviewRow = -1;  // row in last column with audio preview expanded
+    juce::String playingFilePath;  // full path of file currently playing (set by editor)
     juce::TextEditor renameEditor;
     std::unique_ptr<juce::Drawable> folderIcon;
     std::unique_ptr<juce::Drawable> folderIconWhite;
+    std::unique_ptr<juce::Drawable> playIcon;
+    std::unique_ptr<juce::Drawable> pauseIcon;
 
     juce::Rectangle<int> getColumnBounds(int column) const;
     juce::Rectangle<int> getTextBoundsForCell(int column, int row) const;
+    juce::Rectangle<int> getPlayButtonBounds(int column, int row) const;
     juce::File getParentForColumn(int column) const;
     void startInlineRename(int column, int row);
     void showNewFolderDialog(int column);

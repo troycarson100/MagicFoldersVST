@@ -12,12 +12,70 @@ using namespace essentia;
 using namespace essentia::standard;
 
 SampleOrganizerProcessor::SampleOrganizerProcessor()
+    : previewTransport()
 {
+    setPlayConfigDetails(0, 2, 44100.0, 512);
+    previewReadAheadThread.startThread();
     essentia::init();
 }
+
 SampleOrganizerProcessor::~SampleOrganizerProcessor()
 {
+    stopPreview();
+    previewReadAheadThread.stopThread(2000);
     essentia::shutdown();
+}
+
+void SampleOrganizerProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+{
+    previewSampleRate = sampleRate;
+    previewBlockSize = samplesPerBlock;
+    previewTransport.prepareToPlay(samplesPerBlock, sampleRate);
+}
+
+void SampleOrganizerProcessor::releaseResources()
+{
+    previewTransport.releaseResources();
+}
+
+void SampleOrganizerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    buffer.clear();
+    if (previewReaderSource == nullptr)
+        return;
+    juce::AudioSourceChannelInfo info(buffer);
+    previewTransport.getNextAudioBlock(info);
+}
+
+void SampleOrganizerProcessor::setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds)
+{
+    previewTransport.setSource(nullptr);
+    previewReaderSource = std::move(source);
+    previewLengthSeconds = lengthInSeconds;
+    if (previewReaderSource)
+    {
+        const int readAheadSize = 32768;
+        previewTransport.setSource(previewReaderSource.get(), readAheadSize, &previewReadAheadThread, fileSampleRate);
+        if (previewBlockSize > 0 && previewSampleRate > 0)
+            previewTransport.prepareToPlay(previewBlockSize, previewSampleRate);
+    }
+}
+
+void SampleOrganizerProcessor::startPreview()
+{
+    if (previewReaderSource)
+    {
+        previewTransport.setPosition(0.0);
+        previewTransport.start();
+    }
+}
+
+void SampleOrganizerProcessor::stopPreview()
+{
+    previewTransport.stop();
+    previewTransport.setSource(nullptr);
+    previewReaderSource.reset();
+    previewLengthSeconds = 0.0;
 }
 
 juce::AudioProcessorEditor* SampleOrganizerProcessor::createEditor()
@@ -81,6 +139,7 @@ void SampleOrganizerProcessor::getStateInformation(juce::MemoryBlock& destData)
     juce::MemoryOutputStream os(destData, true);
     os.writeString(outputDirectory.getFullPathName());
     os.writeString(batchPlusFolder.getFullPathName());
+    os.writeString(generateFunNames ? "1" : "0");
 }
 
 void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -104,6 +163,11 @@ void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInB
             if (dir.isDirectory())
                 batchPlusFolder = dir;
         }
+    }
+    if (is.getNumBytesRemaining() > 0)
+    {
+        path = is.readString();
+        generateFunNames = (path == "1");
     }
 }
 
@@ -204,6 +268,8 @@ void SampleOrganizerProcessor::processAll()
     for (auto& info : queue)
     {
         auto analysis = analyzeAudio(info.sourceFile, hostBpm);
+        if (analysis.isBlank)
+            continue;  // don't copy or count silent/blank samples
         info.category = analysis.category;
         info.type = analysis.type;
         info.name = analysis.suggestedName;
@@ -226,7 +292,11 @@ bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
     juce::String typeFolderName = (info.type == "Loop") ? "Loop" : "One-Shot";
     juce::File typeFolder = baseDir.getChildFile(typeFolderName);
     typeFolder.createDirectory();
-    juce::File folder = typeFolder.getChildFile(info.category);
+    // Avoid redundant "Loops" inside "Loop" folder; use "Melodic" for generic loops
+    juce::String categoryFolderName = info.category;
+    if (info.type == "Loop" && categoryFolderName == "Loops")
+        categoryFolderName = "Melodic";
+    juce::File folder = typeFolder.getChildFile(categoryFolderName);
     folder.createDirectory();
 
     juce::String ext = info.sourceFile.getFileExtension().trimCharactersAtStart(".").toLowerCase();
@@ -277,9 +347,7 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
     if (!reader)
     {
-        result.category = "Other";
-        result.type = "One-Shot";
-        result.suggestedName = "Sample_01";
+        result.isBlank = true;
         return result;
     }
 
@@ -288,9 +356,7 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     const Real sampleRate = (Real) reader->sampleRate;
     if (numSamples <= 0)
     {
-        result.category = "Other";
-        result.type = "One-Shot";
-        result.suggestedName = "Sample_01";
+        result.isBlank = true;
         return result;
     }
 
@@ -302,6 +368,20 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     mono.clear();
     for (int ch = 0; ch < numChannels; ch++)
         mono.addFrom(0, 0, buffer, ch, 0, numSamples, 1.0f / (float) numChannels);
+
+    // Skip silent/blank samples (e.g. deleted clips in Ableton)
+    float peak = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+        peak = juce::jmax(peak, std::abs(mono.getSample(0, i)));
+    const float peakDb = (peak > 1e-6f) ? (20.0f * std::log10(peak)) : -100.0f;
+    if (peakDb < -60.0f)
+    {
+        result.category = "Other";
+        result.type = "One-Shot";
+        result.suggestedName = "Sample_01";
+        result.isBlank = true;
+        return result;
+    }
 
     // Essentia's OnsetRate and others expect 44100 Hz; resample if needed
     Real workRate = (Real) sampleRate;
@@ -528,18 +608,39 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     juce::String indexStr = juce::String(++categoryCounters[result.category]).paddedLeft('0', 2);
 
     juce::String vibeStr = result.melodicVibe.isNotEmpty() ? ("_" + result.melodicVibe) : juce::String();
-    if (result.type == "Loop")
+    juce::String bpmStr = (result.type == "Loop" && result.bpm > 0) ? ("_" + juce::String(result.bpm) + "bpm") : "";
+    juce::String keyPart = result.key.isNotEmpty() ? ("_" + result.key.replace(" ", "")) : juce::String();
+    if (result.type != "Loop" && (result.category == "Kicks" || result.category == "Snares"
+            || result.category == "Hi-Hats" || result.category == "Percussion"))
+        keyPart = juce::String();
+
+    if (generateFunNames)
     {
-        juce::String bpmStr = result.bpm > 0 ? ("_" + juce::String(result.bpm) + "bpm") : "";
-        juce::String keyPart = result.key.isNotEmpty() ? ("_" + result.key) : "";
-        result.suggestedName = "Loop_" + shortName + vibeStr + keyPart + bpmStr + "_" + indexStr;
+        static const char* kickAdj[] = { "Big", "Liquid", "House_Club", "Holy", "Punchy", "Deep", "Tight", "Boom", "Sub", "Club", "Heavy", "Round" };
+        static const char* snareAdj[] = { "Crispy", "Fat", "Room", "Tight", "Crack", "Ghost", "Rim", "Side", "Dry", "Snap", "Phat", "Layered" };
+        static const char* hihatAdj[] = { "Shiny", "Dark", "Open", "Closed", "Trash", "Tight", "Room", "Crunch", "Sizzle", "Soft", "Bright" };
+        static const char* bassAdj[] = { "Subby", "Punchy", "Round", "Gritty", "Smooth", "Deep", "Warm", "Growl", "Clean", "Saturated" };
+        static const char* loopAdj[] = { "Groove", "Vibe", "Section", "Hook", "Drop", "Build", "Break", "Main", "Fill", "Loop" };
+        static const char* otherAdj[] = { "Cool", "Nice", "Solid", "Fresh", "Smooth", "Clean", "Warm", "Bright", "Dark", "Chill" };
+        const char** list = otherAdj;
+        int listSize = 10;
+        if (result.category == "Kicks") { list = kickAdj; listSize = (int)(sizeof(kickAdj) / sizeof(kickAdj[0])); }
+        else if (result.category == "Snares") { list = snareAdj; listSize = (int)(sizeof(snareAdj) / sizeof(snareAdj[0])); }
+        else if (result.category == "Hi-Hats") { list = hihatAdj; listSize = (int)(sizeof(hihatAdj) / sizeof(hihatAdj[0])); }
+        else if (result.category == "Bass") { list = bassAdj; listSize = (int)(sizeof(bassAdj) / sizeof(bassAdj[0])); }
+        else if (result.type == "Loop" || result.category == "Loops") { list = loopAdj; listSize = (int)(sizeof(loopAdj) / sizeof(loopAdj[0])); }
+        juce::String adj(list[juce::Random::getSystemRandom().nextInt(listSize)]);
+        if (result.type == "Loop")
+            result.suggestedName = adj + "_Loop_" + shortName + vibeStr + keyPart + bpmStr + "_" + indexStr;
+        else
+            result.suggestedName = adj + "_" + shortName + vibeStr + keyPart + "_" + indexStr;
     }
     else
     {
-        juce::String keyPart = (result.key.isNotEmpty() && result.category != "Kicks" && result.category != "Snares"
-                                && result.category != "Hi-Hats" && result.category != "Percussion")
-                               ? ("_" + result.key) : "";
-        result.suggestedName = shortName + vibeStr + keyPart + "_" + indexStr;
+        if (result.type == "Loop")
+            result.suggestedName = "Loop_" + shortName + vibeStr + keyPart + bpmStr + "_" + indexStr;
+        else
+            result.suggestedName = shortName + vibeStr + keyPart + "_" + indexStr;
     }
 
     return result;

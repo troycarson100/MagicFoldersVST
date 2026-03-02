@@ -76,6 +76,8 @@ ColumnBrowserComponent::ColumnBrowserComponent()
         if (folderIconWhite)
             folderIconWhite->replaceColour(juce::Colour(0xff393E46), juce::Colours::white);
     }
+    playIcon = AssetLoader::getPlayIcon();
+    pauseIcon = AssetLoader::getPauseIcon();
     renameEditor.setMultiLine(false);
     renameEditor.setBorder(juce::BorderSize<int>(1));
     renameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
@@ -109,6 +111,23 @@ juce::Rectangle<int> ColumnBrowserComponent::getTextBoundsForCell(int column, in
     int textLeft = bounds.getX() + padH + fullIconWidth + 6;
     juce::Rectangle<int> rowRect(bounds.getX(), row * kRowHeight, bounds.getWidth(), kRowHeight);
     return juce::Rectangle<int>(textLeft, rowRect.getY() + padV, rowRect.getRight() - textLeft - padH, kRowHeight - 2 * padV);
+}
+
+juce::Rectangle<int> ColumnBrowserComponent::getPlayButtonBounds(int column, int row) const
+{
+    const int padH = 12;
+    const int fullIconWidth = 22;
+    juce::Rectangle<int> bounds = getColumnBounds(column);
+    if (bounds.isEmpty()) return {};
+    return juce::Rectangle<int>(bounds.getX() + padH, row * kRowHeight, fullIconWidth, kRowHeight);
+}
+
+void ColumnBrowserComponent::setPlayingFilePath(const juce::String& path)
+{
+    if (playingFilePath == path)
+        return;
+    playingFilePath = path;
+    repaint();
 }
 
 void ColumnBrowserComponent::startInlineRename(int column, int row)
@@ -313,8 +332,26 @@ juce::File ColumnBrowserComponent::getSelectedFileInLastColumn() const
     return (f.existsAsFile() ? f : juce::File());
 }
 
+juce::Rectangle<int> ColumnBrowserComponent::getRowBoundsInColumn(int column, int row) const
+{
+    juce::Rectangle<int> bounds = getColumnBounds(column);
+    if (bounds.isEmpty() || row < 0)
+        return {};
+    return juce::Rectangle<int>(bounds.getX(), row * kRowHeight, bounds.getWidth(), kRowHeight);
+}
+
+void ColumnBrowserComponent::setSelectedRowInColumn(int column, int row)
+{
+    if (column >= 0 && column < selectedRowInColumn.size())
+    {
+        selectedRowInColumn.set(column, row);
+        repaint();
+    }
+}
+
 void ColumnBrowserComponent::refreshColumns()
 {
+    expandedPreviewRow = -1;
     columnItems.clear();
     selectedRowInColumn.clear();
     selectedRowsPerColumn.clear();
@@ -396,6 +433,14 @@ void ColumnBrowserComponent::refreshColumns()
                 break;
             }
         }
+    }
+    // When navigating right (or after setPath), highlight first item in the rightmost column so it's visible
+    const int lastCol = (int)path.size();
+    if (lastCol >= 0 && lastCol < columnItems.size() && lastCol < selectedRowInColumn.size())
+    {
+        const auto& lastItems = columnItems.getReference(lastCol);
+        if (!lastItems.isEmpty() && selectedRowInColumn[lastCol] < 0)
+            selectedRowInColumn.set(lastCol, 0);
     }
     repaint();
 }
@@ -481,6 +526,11 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
             g.setColour(FinderTheme::accent);
             g.drawRect(rowRect.reduced(1), 2);
         }
+        // Column that contains files is at path.size() (not columnItems.size()-1, which may be empty placeholder)
+        const bool isLastCol = (columnIndex == (int)path.size());
+        const bool isFile = !isDir && !isCategoryRow;
+        const bool isPlayingThis = isFile && isLastCol && item.getFullPathName() == playingFilePath;
+
         if (isDir || isCategoryRow)
         {
             juce::Drawable* icon = (selected && folderIconWhite) ? folderIconWhite.get() : folderIcon.get();
@@ -490,6 +540,19 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
                 float iconY = (float)(rowRect.getY() + (kRowHeight - iconHeight) / 2);
                 icon->drawWithin(g, juce::Rectangle<float>(iconX, iconY, (float)fullIconWidth, (float)iconHeight),
                     juce::RectanglePlacement::stretchToFit, 1.0f);
+            }
+        }
+        else if (isLastCol && isFile)
+        {
+            // Play/pause button – use SVG assets
+            const float iconSize = 16.0f;
+            float cx = rowRect.getX() + padH + fullIconWidth * 0.5f;
+            float cy = rowRect.getY() + kRowHeight * 0.5f;
+            auto iconArea = juce::Rectangle<float>(cx - iconSize * 0.5f, cy - iconSize * 0.5f, iconSize, iconSize);
+            juce::Drawable* icon = (isPlayingThis && pauseIcon) ? pauseIcon.get() : (playIcon.get());
+            if (icon)
+            {
+                icon->drawWithin(g, iconArea, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize, 1.0f);
             }
         }
         g.setColour(selected ? FinderTheme::textOnDark : FinderTheme::textCharcoal);
@@ -638,13 +701,15 @@ void ColumnBrowserComponent::mouseDown(const juce::MouseEvent& e)
 
         if (e.mods.isShiftDown())
         {
-            int a = anchor >= 0 ? anchor : row;
+            // Anchor = last set anchor, or current selection (e.g. from keyboard), or clicked row
+            int a = anchor >= 0 ? anchor : ((col < selectedRowInColumn.size() && selectedRowInColumn[col] >= 0) ? selectedRowInColumn[col] : row);
             int lo = juce::jmin(a, row);
             int hi = juce::jmax(a, row);
             selRows.clear();
             for (int r = lo; r <= hi; ++r)
                 selRows.add(r);
             selectedRowInColumn.set(col, row);
+            anchor = row;  // next shift+click uses this as one end (like queue / Finder)
             repaint();
             return;
         }
@@ -811,8 +876,17 @@ void ColumnBrowserComponent::mouseUp(const juce::MouseEvent&)
                 juce::File f = items.getReference(row);
                 if (f.isDirectory() && onFolderSelected)
                     onFolderSelected(col, row);
-                else if (col == (int)columnItems.size() - 1 && onFileSelected)
-                    onFileSelected(row);
+                else if (col == (int)path.size())
+                {
+                    juce::Rectangle<int> playBounds = getPlayButtonBounds(col, row);
+                    if (onFilePreviewToggled && playBounds.contains(mouseDownPosition))
+                    {
+                        bool isPlayingThis = (f.getFullPathName() == playingFilePath);
+                        onFilePreviewToggled(row, !isPlayingThis);
+                    }
+                    else if (onFileSelected)
+                        onFileSelected(row);
+                }
             }
         }
     }
@@ -1035,6 +1109,30 @@ bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)
             if (f.isDirectory() && onFolderSelected)
             {
                 onFolderSelected(col, sel);
+                return true;
+            }
+        }
+        return false;
+    }
+    if (key == juce::KeyPress::spaceKey)
+    {
+        const int fileCol = (int)path.size();
+        if (col == fileCol && sel >= 0 && sel < items.size())
+        {
+            juce::File f = items.getReference(sel);
+            if (f.existsAsFile() && onFilePreviewToggled)
+            {
+                if (expandedPreviewRow == sel)
+                {
+                    expandedPreviewRow = -1;
+                    onFilePreviewToggled(sel, false);
+                }
+                else
+                {
+                    expandedPreviewRow = sel;
+                    onFilePreviewToggled(sel, true);
+                }
+                repaint();
                 return true;
             }
         }
