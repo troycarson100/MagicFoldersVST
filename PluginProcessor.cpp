@@ -11,6 +11,131 @@
 using namespace essentia;
 using namespace essentia::standard;
 
+// ─── Waveform duplicate detection ────────────────────────────────────────────
+namespace
+{
+    static constexpr int kFingerprintBins = 64;  // envelope resolution
+    static constexpr float kDupSimilarityThreshold = 0.992f;  // cosine sim
+    static constexpr double kDupDurationTolerance  = 0.03;    // ±3% duration
+
+    struct WaveformFingerprint
+    {
+        float    bins[kFingerprintBins] = {};  // normalised RMS envelope
+        double   durationSeconds = 0.0;
+        uint64_t quickHash = 0;  // fast PCM hash for exact-match short-circuit
+        juce::String filePath;
+    };
+
+    /** Compute a compact waveform fingerprint for duplicate detection.
+     *  Returns an empty fingerprint (durationSeconds == 0) on read failure. */
+    WaveformFingerprint computeFingerprint(const juce::File& file)
+    {
+        WaveformFingerprint fp;
+        fp.filePath = file.getFullPathName();
+
+        juce::AudioFormatManager fmt;
+        fmt.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(fmt.createReaderFor(file));
+        if (!reader || reader->lengthInSamples <= 0) return fp;
+
+        const int totalSamples = (int)juce::jmin(reader->lengthInSamples, (juce::int64)10'000'000);
+        const int numChannels  = (int)reader->numChannels;
+        fp.durationSeconds     = (double)reader->lengthInSamples / reader->sampleRate;
+
+        // Read all samples into a mono buffer (mix down channels).
+        // Limit to first 10 M samples (~3–4 min at 44 kHz) to keep memory sane.
+        juce::AudioBuffer<float> mono(1, totalSamples);
+        {
+            juce::AudioBuffer<float> raw(numChannels, totalSamples);
+            reader->read(&raw, 0, totalSamples, 0, true, true);
+            mono.clear();
+            float* dst = mono.getWritePointer(0);
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const float* src = raw.getReadPointer(ch);
+                for (int s = 0; s < totalSamples; ++s)
+                    dst[s] += src[s];
+            }
+            if (numChannels > 1)
+                for (int s = 0; s < totalSamples; ++s)
+                    dst[s] /= (float)numChannels;
+        }
+
+        // Quick 64-bit FNV-1a hash of quantised PCM — fast exact-match shortcut.
+        // 8-bit quantisation tolerates trivial float rounding while staying stable.
+        {
+            const float* src = mono.getReadPointer(0);
+            uint64_t h = 14695981039346656037ULL;  // FNV offset basis
+            for (int s = 0; s < totalSamples; ++s)
+            {
+                uint8_t b = (uint8_t)juce::jlimit(0, 255, (int)((src[s] * 0.5f + 0.5f) * 255.0f));
+                h ^= b;
+                h *= 1099511628211ULL;  // FNV prime
+            }
+            fp.quickHash = h;
+        }
+
+        // Compute RMS envelope: divide into kFingerprintBins segments.
+        const int binSize = juce::jmax(1, totalSamples / kFingerprintBins);
+        const float* src  = mono.getReadPointer(0);
+        float peak = 0.0f;
+        for (int b = 0; b < kFingerprintBins; ++b)
+        {
+            int start = b * binSize;
+            int end   = juce::jmin(start + binSize, totalSamples);
+            double sum = 0.0;
+            for (int s = start; s < end; ++s)
+                sum += (double)src[s] * src[s];
+            float rms = (float)std::sqrt(sum / juce::jmax(1, end - start));
+            fp.bins[b] = rms;
+            peak = juce::jmax(peak, rms);
+        }
+        // Normalise so the peak bin == 1.0 (makes comparison amplitude-invariant).
+        if (peak > 1e-6f)
+            for (int b = 0; b < kFingerprintBins; ++b)
+                fp.bins[b] /= peak;
+
+        return fp;
+    }
+
+    /** Cosine similarity in [0, 1] between two fingerprint bin arrays. */
+    float fingerprintSimilarity(const WaveformFingerprint& a, const WaveformFingerprint& b)
+    {
+        double dot = 0.0, normA = 0.0, normB = 0.0;
+        for (int i = 0; i < kFingerprintBins; ++i)
+        {
+            dot   += (double)a.bins[i] * b.bins[i];
+            normA += (double)a.bins[i] * a.bins[i];
+            normB += (double)b.bins[i] * b.bins[i];
+        }
+        double denom = std::sqrt(normA) * std::sqrt(normB);
+        return (denom < 1e-9) ? 0.0f : (float)(dot / denom);
+    }
+
+    /** Returns true if fp matches any fingerprint in the seen list. */
+    bool isDuplicate(const WaveformFingerprint& fp,
+                     const std::vector<WaveformFingerprint>& seen)
+    {
+        if (fp.durationSeconds <= 0.0) return false;
+        for (const auto& s : seen)
+        {
+            // Fast path: identical PCM hash → exact duplicate.
+            if (fp.quickHash != 0 && fp.quickHash == s.quickHash)
+                return true;
+            // Duration gate: if lengths differ by >3 % it's a different sample.
+            double durationRatio = std::abs(fp.durationSeconds - s.durationSeconds)
+                                   / juce::jmax(fp.durationSeconds, s.durationSeconds);
+            if (durationRatio > kDupDurationTolerance)
+                continue;
+            // Slow path: compare waveform shape.
+            if (fingerprintSimilarity(fp, s) >= kDupSimilarityThreshold)
+                return true;
+        }
+        return false;
+    }
+} // namespace
+// ─── End duplicate detection ─────────────────────────────────────────────────
+
 MagicFoldersProcessor::MagicFoldersProcessor()
     : previewTransport()
 {
@@ -419,6 +544,8 @@ void MagicFoldersProcessor::processAll()
     if (!targetDir.isDirectory()) return;
 
     categoryCounters.clear();
+    lastRunDuplicatesSkipped = 0;
+    lastRunBlankSkipped      = 0;
 
     double hostBpm = 0.0;
     if (useHostBpm)
@@ -429,19 +556,53 @@ void MagicFoldersProcessor::processAll()
                     hostBpm = *bpm;
     }
 
+    // ── Seed fingerprint map from files already in the destination pack ──────
+    // This prevents re-copying samples that were processed in a previous run.
+    std::vector<WaveformFingerprint> seenFingerprints;
+    {
+        juce::Array<juce::File> existingFiles;
+        targetDir.findChildFiles(existingFiles, juce::File::findFiles, true);
+        juce::AudioFormatManager checkFmt;
+        checkFmt.registerBasicFormats();
+        for (const auto& ef : existingFiles)
+        {
+            if (!checkFmt.findFormatForFileExtension(ef.getFileExtension())) continue;
+            auto fp = computeFingerprint(ef);
+            if (fp.durationSeconds > 0.0)
+                seenFingerprints.push_back(std::move(fp));
+        }
+    }
+
+    // ── Process each queued file ─────────────────────────────────────────────
     for (auto& info : queue)
     {
+        // Waveform duplicate check (against existing files + earlier items in this batch)
+        auto fp = computeFingerprint(info.sourceFile);
+        if (fp.durationSeconds > 0.0 && isDuplicate(fp, seenFingerprints))
+        {
+            ++lastRunDuplicatesSkipped;
+            continue;
+        }
+
         auto analysis = analyzeAudio(info.sourceFile, hostBpm);
         if (analysis.isBlank)
-            continue;  // don't copy or count silent/blank samples
-        info.category = analysis.category;
-        info.type = analysis.type;
-        info.name = analysis.suggestedName;
+        {
+            ++lastRunBlankSkipped;
+            continue;
+        }
+
+        info.category      = analysis.category;
+        info.type          = analysis.type;
+        info.name          = analysis.suggestedName;
         info.suggested_name = analysis.suggestedName;
-        info.bpm = analysis.bpm;
-        info.key = useProjectKey ? projectKey : analysis.key;
+        info.bpm           = analysis.bpm;
+        info.key           = useProjectKey ? projectKey : analysis.key;
         copyToFolder(info);
         processed.add(info);
+
+        // Register this file's fingerprint so subsequent queue items can't duplicate it.
+        if (fp.durationSeconds > 0.0)
+            seenFingerprints.push_back(std::move(fp));
     }
 
     queue.clear();

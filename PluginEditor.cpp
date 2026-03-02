@@ -458,8 +458,24 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
                 processor.processAll();
                 refreshPackList();
                 columnBrowser.refreshFromDisk();
-                dragLabel.setText("Drag Sample", juce::dontSendNotification);
-                dragLabel.setVisible(true);
+
+                // Show a brief summary (duplicates skipped) then revert to normal.
+                int dups = processor.lastRunDuplicatesSkipped;
+                if (dups > 0)
+                {
+                    juce::String msg = juce::String(dups) + (dups == 1 ? " duplicate skipped" : " duplicates skipped");
+                    dragLabel.setText(msg, juce::dontSendNotification);
+                    dragLabel.setVisible(true);
+                    juce::Timer::callAfterDelay(3000, [this]() {
+                        dragLabel.setText("Drag Sample", juce::dontSendNotification);
+                        repaint();
+                    });
+                }
+                else
+                {
+                    dragLabel.setText("Drag Sample", juce::dontSendNotification);
+                    dragLabel.setVisible(true);
+                }
                 updateBreadcrumb();
                 repaint();
             }

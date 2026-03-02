@@ -104,6 +104,11 @@ public:
 
     std::map<juce::String, int> categoryCounters;
 
+    /** Set after each processAll() call — counts files skipped as waveform duplicates. */
+    int lastRunDuplicatesSkipped = 0;
+    /** Set after each processAll() call — counts files skipped as blank/silent. */
+    int lastRunBlankSkipped = 0;
+
     // Preview playback (uses host/standalone audio output)
     void setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds);
     void startPreview();
