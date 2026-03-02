@@ -61,7 +61,7 @@ static juce::String sanitiseRename(const juce::String& s)
 
 juce::StringArray ColumnBrowserComponent::getDefaultCategories()
 {
-    return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "Songstarter", "FX", "Percussion", "Vocals", "Other" };
+    return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "Songstarter", "FX", "Vocals", "Other" };
 }
 
 const juce::String ColumnBrowserComponent::kInternalDragPrefix = "MagicFolders:";
@@ -467,6 +467,9 @@ void ColumnBrowserComponent::refreshColumns()
             selectedRowInColumn.set(lastCol, 0);
     }
     repaint();
+
+    if (onColumnWidthsChanged)
+        onColumnWidthsChanged();
 }
 
 int ColumnBrowserComponent::getColumnAtX(int x) const
