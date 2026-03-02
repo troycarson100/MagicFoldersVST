@@ -552,6 +552,9 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
             juce::Drawable* icon = (isPlayingThis && pauseIcon) ? pauseIcon.get() : (playIcon.get());
             if (icon)
             {
+                // Default (not playing) = dark \"black\"; when playing, use accent colour
+                juce::Colour iconColour = isPlayingThis ? FinderTheme::accent : FinderTheme::textCharcoal;
+                icon->setOverlayColour(iconColour);
                 icon->drawWithin(g, iconArea, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize, 1.0f);
             }
         }
