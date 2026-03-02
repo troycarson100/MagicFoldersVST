@@ -581,7 +581,20 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
              && zcrF < 0.12f && onsetTimes.size() >= 2 && onsetTimes.size() <= 30)
         result.category = "Guitar";
     else if (result.type == "Loop")
-        result.category = "Loops";
+    {
+        const int onsetCount = (int) onsetTimes.size();
+        // Long, evolving tonal loops with relatively few hits → treat as Songstarter
+        if (duration >= 4.0 && onsetCount <= 8 && result.key.isNotEmpty())
+            result.category = "Songstarter";
+        // Soft, atmospheric loops with low attack and darker spectrum → Texture
+        else if (!hasSharpAttack && duration >= 2.0 && centroidF < 1500.0f && zcrF < 0.1f)
+            result.category = "Textures";
+        // Fallback melodic loop when we know it's tonal but didn't hit stricter Melodic checks
+        else if (result.key.isNotEmpty())
+            result.category = "Melodic";
+        else
+            result.category = "Textures";
+    }
     else
         result.category = "Other";
 
@@ -601,8 +614,9 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     std::map<juce::String, juce::String> shortNames = {
         {"Kicks", "Kick"}, {"Snares", "Snare"}, {"Hi-Hats", "HiHat"},
         {"Bass", "Bass"}, {"Guitar", "Guitar"}, {"FX", "FX"},
-        {"Loops", "Loop"}, {"Percussion", "Perc"},
-        {"Melodic", "Melody"}, {"Other", "Sample"}
+        {"Percussion", "Perc"}, {"Melodic", "Melody"},
+        {"Textures", "Texture"}, {"Songstarter", "Songstarter"},
+        {"Other", "Sample"}, {"Loops", "Loop"}
     };
     juce::String shortName = (shortNames.count(result.category) > 0) ? shortNames[result.category] : "Sample";
     juce::String indexStr = juce::String(++categoryCounters[result.category]).paddedLeft('0', 2);
@@ -628,7 +642,7 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
         else if (result.category == "Snares") { list = snareAdj; listSize = (int)(sizeof(snareAdj) / sizeof(snareAdj[0])); }
         else if (result.category == "Hi-Hats") { list = hihatAdj; listSize = (int)(sizeof(hihatAdj) / sizeof(hihatAdj[0])); }
         else if (result.category == "Bass") { list = bassAdj; listSize = (int)(sizeof(bassAdj) / sizeof(bassAdj[0])); }
-        else if (result.type == "Loop" || result.category == "Loops") { list = loopAdj; listSize = (int)(sizeof(loopAdj) / sizeof(loopAdj[0])); }
+        else if (result.type == "Loop" || result.category == "Loops" || result.category == "Textures" || result.category == "Songstarter") { list = loopAdj; listSize = (int)(sizeof(loopAdj) / sizeof(loopAdj[0])); }
         juce::String adj(list[juce::Random::getSystemRandom().nextInt(listSize)]);
         if (result.type == "Loop")
             result.suggestedName = adj + "_Loop_" + shortName + vibeStr + keyPart + bpmStr + "_" + indexStr;

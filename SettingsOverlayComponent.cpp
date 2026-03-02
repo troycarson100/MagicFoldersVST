@@ -24,6 +24,7 @@ void SettingsOverlayComponent::ContentArea::paint(juce::Graphics& g)
     }
 }
 
+
 juce::StringArray SettingsOverlayComponent::getKeyList()
 {
     return { "C Major", "C Minor", "C# Major", "C# Minor", "D Major", "D Minor",

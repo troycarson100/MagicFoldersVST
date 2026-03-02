@@ -61,7 +61,7 @@ static juce::String sanitiseRename(const juce::String& s)
 
 juce::StringArray ColumnBrowserComponent::getDefaultCategories()
 {
-    return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "FX", "Loops", "Percussion", "Vocals", "Other" };
+    return { "Bass", "Drums", "Guitar", "Melodic", "Textures", "Songstarter", "FX", "Percussion", "Vocals", "Other" };
 }
 
 const juce::String ColumnBrowserComponent::kInternalDragPrefix = "MagicFolders:";
@@ -76,8 +76,28 @@ ColumnBrowserComponent::ColumnBrowserComponent()
         if (folderIconWhite)
             folderIconWhite->replaceColour(juce::Colour(0xff393E46), juce::Colours::white);
     }
-    playIcon = AssetLoader::getPlayIcon();
-    pauseIcon = AssetLoader::getPauseIcon();
+    if (auto basePlay = AssetLoader::getPlayIcon())
+    {
+        // Base white icon (used when row is selected)
+        playIcon = std::move(basePlay);
+        if (playIcon)
+        {
+            playIconDark = playIcon->createCopy();
+            if (playIconDark)
+                playIconDark->replaceColour(juce::Colours::white, FinderTheme::textCharcoal);
+        }
+    }
+    if (auto basePause = AssetLoader::getPauseIcon())
+    {
+        // Base white icon (used when row is selected)
+        pauseIcon = std::move(basePause);
+        if (pauseIcon)
+        {
+            pauseIconAccent = pauseIcon->createCopy();
+            if (pauseIconAccent)
+                pauseIconAccent->replaceColour(juce::Colours::white, FinderTheme::accent);
+        }
+    }
     renameEditor.setMultiLine(false);
     renameEditor.setBorder(juce::BorderSize<int>(1));
     renameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
@@ -549,12 +569,15 @@ void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juc
             float cx = rowRect.getX() + padH + fullIconWidth * 0.5f;
             float cy = rowRect.getY() + kRowHeight * 0.5f;
             auto iconArea = juce::Rectangle<float>(cx - iconSize * 0.5f, cy - iconSize * 0.5f, iconSize, iconSize);
-            juce::Drawable* icon = (isPlayingThis && pauseIcon) ? pauseIcon.get() : (playIcon.get());
+            // When the row is selected, keep icons white for contrast.
+            // When not selected: dark play icon by default, accent pause icon while playing.
+            juce::Drawable* icon = nullptr;
+            if (selected)
+                icon = isPlayingThis ? pauseIcon.get() : playIcon.get();
+            else
+                icon = isPlayingThis ? pauseIconAccent.get() : playIconDark.get();
             if (icon)
             {
-                // Default (not playing) = dark \"black\"; when playing, use accent colour
-                juce::Colour iconColour = isPlayingThis ? FinderTheme::accent : FinderTheme::textCharcoal;
-                icon->setOverlayColour(iconColour);
                 icon->drawWithin(g, iconArea, juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize, 1.0f);
             }
         }

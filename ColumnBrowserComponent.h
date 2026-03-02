@@ -89,6 +89,8 @@ private:
     std::unique_ptr<juce::Drawable> folderIconWhite;
     std::unique_ptr<juce::Drawable> playIcon;
     std::unique_ptr<juce::Drawable> pauseIcon;
+    std::unique_ptr<juce::Drawable> playIconDark;
+    std::unique_ptr<juce::Drawable> pauseIconAccent;
 
     juce::Rectangle<int> getColumnBounds(int column) const;
     juce::Rectangle<int> getTextBoundsForCell(int column, int row) const;

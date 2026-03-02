@@ -898,6 +898,7 @@ void SampleOrganizerEditor::updateBreadcrumb()
         breadcrumbLabel.setVisible(false);
     else
         breadcrumbLabel.setVisible(true);
+    repaint();
 }
 
 void SampleOrganizerEditor::pushPathToHistory()
@@ -1206,6 +1207,8 @@ void SampleOrganizerEditor::playSelectedFile()
     {
         processor.stopPreview();
         playingFilePath.clear();
+        columnBrowser.setPlayingFilePath({});
+        stopTimer();
         return;
     }
     processor.stopPreview();
@@ -1219,7 +1222,10 @@ void SampleOrganizerEditor::playSelectedFile()
     processor.setPreviewSource(std::move(source), fileSampleRate, previewLengthSeconds);
     processor.startPreview();
     playingFilePath = path;
-    columnBrowser.repaint();
+    columnBrowser.setPlayingFilePath(path);
+    updateBreadcrumb();
+    repaint();
+    startTimer(100);
 }
 
 void SampleOrganizerEditor::AudioPreviewStrip::PlayPauseButton::paintButton(juce::Graphics& g, bool highlighted, bool)
@@ -1380,6 +1386,8 @@ void SampleOrganizerEditor::timerCallback()
         playingFilePath.clear();
         columnBrowser.setPlayingFilePath({});
         columnBrowser.setExpandedPreviewRow(-1);
+        stopTimer();
+        columnBrowser.repaint();
     }
 }
 
