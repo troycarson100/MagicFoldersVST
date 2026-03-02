@@ -249,6 +249,170 @@ juce::String SampleOrganizerProcessor::detectType(const juce::String& fn)
     return "One-Shot";
 }
 
+namespace
+{
+    /** Lightweight filename-based hints to refine ambiguous analysis results.
+        Only meant to gently steer between Guitar/Bass/Melodic/Textures, not override clear drum/FX hits. */
+    void applyFilenameHints(const juce::File& file, SampleOrganizerProcessor::AnalysisResult& result)
+    {
+        const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
+
+        const bool nameSuggestsGuitar =
+            lowerName.contains("gtr") || lowerName.contains("guitar") ||
+            lowerName.contains("egtr") || lowerName.contains("agtr") ||
+            lowerName.contains("eg_") || lowerName.contains("ag_") ||
+            lowerName.contains("strum") || lowerName.contains("strummed") ||
+            lowerName.contains("riff") || lowerName.contains("chug") ||
+            lowerName.contains("palm") || lowerName.contains("powerchord") ||
+            lowerName.contains("power_chord") || lowerName.contains("rhythm") ||
+            lowerName.contains("pluck") || lowerName.contains("chord");
+
+        const bool nameSuggestsBass =
+            lowerName.contains("bass") || lowerName.contains("808") ||
+            lowerName.contains("sub") || lowerName.contains("lowend") ||
+            lowerName.contains("bs_") || lowerName.contains("bss") ||
+            lowerName.contains("subdrop") || lowerName.contains("sub_drop") ||
+            lowerName.contains("slide");
+
+        const bool nameSuggestsTexture =
+            lowerName.contains("texture") || lowerName.contains("atmo") ||
+            lowerName.contains("atmos") || lowerName.contains("ambience") ||
+            lowerName.contains("ambient") || lowerName.contains("drone") ||
+            lowerName.contains("noise") || lowerName.contains("fx");
+
+        const bool nameSuggestsMelodic =
+            lowerName.contains("melod") || lowerName.contains("lead") ||
+            lowerName.contains("keys") || lowerName.contains("piano") ||
+            lowerName.contains("synth") || lowerName.contains("arp") ||
+            lowerName.contains("pluck") || lowerName.contains("hook");
+
+        // Only nudge loops; one-shots are already handled well by attack-based rules.
+        if (result.type != "Loop")
+            return;
+
+        // If the filename is clearly an instrument, prefer that over a generic bucket.
+        if (result.category == "Textures" || result.category == "Melodic" || result.category == "Other" || result.category == "Loops")
+        {
+            if (nameSuggestsGuitar)
+            {
+                result.category = "Guitar";
+                return;
+            }
+            if (nameSuggestsBass)
+            {
+                result.category = "Bass";
+                return;
+            }
+        }
+
+        // For ambiguous \"Textures\" / \"Other\", lean toward Melodic when the name sounds musical.
+        if ((result.category == "Textures" || result.category == "Other" || result.category == "Loops") && nameSuggestsMelodic && !nameSuggestsTexture)
+        {
+            result.category = "Melodic";
+            return;
+        }
+
+        // Only keep Textures when either the name explicitly calls it out or no strong melodic hints exist.
+        if (result.category == "Textures" && nameSuggestsTexture && !nameSuggestsMelodic && !nameSuggestsGuitar && !nameSuggestsBass)
+        {
+            return;
+        }
+        if (result.category == "Textures" && (nameSuggestsGuitar || nameSuggestsBass || nameSuggestsMelodic))
+        {
+            if (nameSuggestsGuitar)      result.category = "Guitar";
+            else if (nameSuggestsBass)   result.category = "Bass";
+            else                         result.category = "Melodic";
+        }
+    }
+
+    /** Decide whether a loop is a good candidate for \"Textures\" based purely on audio features. */
+    bool isNoisyTextureCandidate(bool hasSharpAttack,
+                                 double duration,
+                                 float centroidF,
+                                 float zcrF,
+                                 float rolloffF,
+                                 const std::vector<essentia::Real>& onsetTimes)
+    {
+        const int onsetCount = (int) onsetTimes.size();
+        const bool veryFewOnsets = onsetCount <= 4;
+        const bool quiteLong = duration >= 3.0;
+        const bool darkAndSoft = !hasSharpAttack && centroidF < 1800.0f && zcrF < 0.12f;
+        const bool noisySwish = zcrF > 0.18f && rolloffF > 6000.0f;
+
+        // Long, sparse, dark pads or noisy swishes without much transient structure.
+        return (quiteLong && veryFewOnsets && darkAndSoft) || noisySwish;
+    }
+
+    /** Heuristic detector for guitar-like loops: tonal, plucked attacks, mid-centric spectrum, moderate onset density. */
+    bool isGuitarLikeLoop(bool isTonal,
+                          bool hasSharpAttack,
+                          double duration,
+                          float centroidF,
+                          float zcrF,
+                          int onsetCount)
+    {
+        if (!isTonal)
+            return false;
+
+        // Broad but reasonable musical loop duration.
+        if (duration < 0.75 || duration > 16.0)
+            return false;
+
+        if (onsetCount < 2 || onsetCount > 48)
+            return false;
+
+        // Allow both sharper rhythm parts and softer picked patterns.
+        const bool rhythmGuitar =
+            hasSharpAttack &&
+            centroidF >= 300.0f && centroidF <= 5500.0f &&
+            zcrF < 0.22f;
+
+        const bool pickedGuitar =
+            !hasSharpAttack &&
+            onsetCount >= 4 &&
+            centroidF >= 250.0f && centroidF <= 4500.0f &&
+            zcrF < 0.25f;
+
+        return rhythmGuitar || pickedGuitar;
+    }
+
+    // Toggleable debug logging to help tune thresholds against real-world packs.
+    static constexpr bool kLogAnalysisDebug = false;
+
+    void logAnalysisDebug(const juce::File& file,
+                          const SampleOrganizerProcessor::AnalysisResult& result,
+                          double duration,
+                          int onsetCount,
+                          float centroidF,
+                          float zcrF,
+                          float rolloffF,
+                          float attackRMS,
+                          float bodyRMS,
+                          float keyStrength,
+                          float firstToSecondRelativeStrength)
+    {
+        if (!kLogAnalysisDebug)
+            return;
+
+        juce::String msg;
+        msg << "[Analysis] "
+            << file.getFileName() << " | type=" << result.type
+            << " category=" << result.category
+            << " bpm=" << result.bpm
+            << " key=" << result.key
+            << " dur=" << juce::String(duration, 2)
+            << " onsets=" << onsetCount
+            << " centroid=" << juce::String(centroidF, 1)
+            << " zcr=" << juce::String(zcrF, 3)
+            << " rolloff=" << juce::String(rolloffF, 1)
+            << " atkRMS=" << juce::String(attackRMS, 4)
+            << " bodyRMS=" << juce::String(bodyRMS, 4)
+            << " keyStr=" << juce::String(keyStrength, 3)
+            << " relKeyStr=" << juce::String(firstToSecondRelativeStrength, 3);
+        DBG(msg);
+    }
+}
+
 void SampleOrganizerProcessor::processAll()
 {
     juce::File targetDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
@@ -495,7 +659,7 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     delete hpcpAlgo;
     delete keyDetector;
 
-    if (keyStrength > 0.4f)
+    if (keyStrength > 0.35f)
         result.key = juce::String(keyStr) + (scaleStr == "minor" ? "m" : "");
 
     // Instrument/category: MFCC + spectral features
@@ -556,6 +720,9 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     float zcrF = (float) zeroCrossingRate;
     float rolloffF = (float) spectralRolloff;
 
+    // Treat anything with a reasonably confident key as tonal.
+    const bool isTonal = (keyStrength > 0.3f && firstToSecondRelativeStrength > 0.1f) || result.key.isNotEmpty();
+
     // Drums and percussion first (most specific)
     if (hasSharpAttack && centroidF < 800.0f && zcrF < 0.1f)
         result.category = "Kicks";
@@ -569,31 +736,34 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
         result.category = "FX";
     else if (hasSharpAttack && duration < 0.5f)
         result.category = "Percussion";
+    // Broad guitar-like loop detector before more specific melodic checks.
+    else if (result.type == "Loop" && isGuitarLikeLoop(isTonal, hasSharpAttack, duration, centroidF, zcrF, (int) onsetTimes.size()))
+        result.category = "Guitar";
     // Guitar: key + mid-range harmonic content; check before Melodic so guitar loops don't become "Keys"
-    else if (result.key.isNotEmpty() && centroidF >= 400.0f && centroidF <= 4500.0f
+    else if (isTonal && centroidF >= 400.0f && centroidF <= 4500.0f
              && (!hasSharpAttack || (result.type == "Loop" && onsetTimes.size() >= 2 && onsetTimes.size() <= 24)))
         result.category = "Guitar";
     // Melodic: key + brighter/synth-like (higher centroid or different timbre)
-    else if (!hasSharpAttack && result.key.isNotEmpty() && mfcc2 > 0.0f)
+    else if (!hasSharpAttack && isTonal && mfcc2 > 0.0f)
         result.category = "Melodic";
     // Loop with guitar-like timbre but no key detected → still call it Guitar
-    else if (result.type == "Loop" && centroidF >= 400.0f && centroidF <= 4500.0f
+    else if (result.type == "Loop" && isTonal && centroidF >= 400.0f && centroidF <= 4500.0f
              && zcrF < 0.12f && onsetTimes.size() >= 2 && onsetTimes.size() <= 30)
         result.category = "Guitar";
     else if (result.type == "Loop")
     {
         const int onsetCount = (int) onsetTimes.size();
-        // Long, evolving tonal loops with relatively few hits → treat as Songstarter
-        if (duration >= 4.0 && onsetCount <= 8 && result.key.isNotEmpty())
+        // Long, evolving tonal loops with a clear sense of groove or song section → Songstarter
+        if (isTonal && duration >= 4.0 && onsetCount >= 4 && onsetCount <= 32 && result.bpm > 0)
             result.category = "Songstarter";
-        // Soft, atmospheric loops with low attack and darker spectrum → Texture
-        else if (!hasSharpAttack && duration >= 2.0 && centroidF < 1500.0f && zcrF < 0.1f)
+        // Strict Texture: only when non‑tonal and audio looks like a pad/atmosphere or noisy swish
+        else if (!isTonal && isNoisyTextureCandidate(hasSharpAttack, duration, centroidF, zcrF, rolloffF, onsetTimes))
             result.category = "Textures";
-        // Fallback melodic loop when we know it's tonal but didn't hit stricter Melodic checks
-        else if (result.key.isNotEmpty())
+        // Fallback melodic loop when tonal but we didn't hit more specific Melodic/Guitar/Bass rules
+        else if (isTonal)
             result.category = "Melodic";
         else
-            result.category = "Textures";
+            result.category = "Other";
     }
     else
         result.category = "Other";
@@ -609,6 +779,9 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
         else
             result.melodicVibe = "Keys";
     }
+
+    // Apply filename-based hints last so they can gently correct ambiguous loop cases (e.g. \"Guitar\" vs \"Textures\").
+    applyFilenameHints(file, result);
 
     // Smart naming
     std::map<juce::String, juce::String> shortNames = {

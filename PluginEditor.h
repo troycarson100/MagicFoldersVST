@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <atomic>
 #include "PluginProcessor.h"
 #include "FinderTheme.h"
 #include "AssetLoader.h"
@@ -99,13 +100,18 @@ private:
     juce::Label dragLabel;
     std::unique_ptr<juce::Drawable> batchPlusDrawable;
     juce::DrawableButton batchPlusBtn { "Batch+", juce::DrawableButton::ImageFitted };
+    std::atomic<bool> isBatchScanning { false };
     juce::Viewport queueViewport;
     struct QueueListContent : juce::Component
     {
         SampleOrganizerEditor* editor = nullptr;
+        bool hoveringClearBtn = false;
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& e) override;
+        void mouseMove(const juce::MouseEvent& e) override;
+        void mouseExit(const juce::MouseEvent& e) override;
         bool keyPressed(const juce::KeyPress& key) override;
+        juce::Rectangle<int> getClearBtnBounds() const;
     };
     QueueListContent queueListContent;
     juce::Array<int> selectedQueueIndices;

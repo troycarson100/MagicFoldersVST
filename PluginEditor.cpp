@@ -1,4 +1,6 @@
 #include "PluginEditor.h"
+#include <thread>
+#include <memory>
 
 using namespace FinderTheme;
 
@@ -198,12 +200,13 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     addAndMakeVisible(packList);
 
     packRenameEditor.setMultiLine(false);
-    packRenameEditor.setBorder(juce::BorderSize<int>(1));
+    // Inline rename should look like simple text, without a grey border.
+    packRenameEditor.setBorder(juce::BorderSize<int>(0));
     packRenameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
     packRenameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
     packRenameEditor.setColour(juce::TextEditor::highlightColourId, juce::Colour(0xffb0d4f0));
     packRenameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
-    packRenameEditor.setColour(juce::TextEditor::outlineColourId, FinderTheme::topBar);
+    packRenameEditor.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
     packRenameEditor.onReturnKey = [this] { commitPackRename(); };
     packRenameEditor.onEscapeKey = [this] { hidePackRenameEditor(); };
 
@@ -317,42 +320,67 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     batchPlusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
     batchPlusBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
     batchPlusBtn.onClick = [this] {
-        // Disable immediately so the click registers and we ignore repeat clicks while scanning
+        // Guard against re-entry while a scan is already running
+        if (isBatchScanning.exchange(true)) return;
         batchPlusBtn.setEnabled(false);
+        breadcrumbLabel.setVisible(true);
+        breadcrumbLabel.setText("Scanning...", juce::dontSendNotification);
         repaint();
-        // Defer heavy work so the button can repaint as disabled before we block on the scan
-        juce::Timer::callAfterDelay(1, [this] {
+
+        if (!processor.batchPlusFolder.isDirectory())
+        {
+            processor.tryAutoDetectAbletonSamplesFolder();
             if (!processor.batchPlusFolder.isDirectory())
             {
-                processor.tryAutoDetectAbletonSamplesFolder();
-                if (!processor.batchPlusFolder.isDirectory())
-                {
-                    breadcrumbLabel.setVisible(true);
-                    breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
-                    settingsOverlay->syncFromProcessor();
-                    settingsOverlay->setVisible(true);
-                    settingsOverlay->toFront(true);
-                    batchPlusBtn.setEnabled(true);
-                    return;
-                }
+                breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
+                settingsOverlay->syncFromProcessor();
+                settingsOverlay->setVisible(true);
+                settingsOverlay->toFront(true);
+                batchPlusBtn.setEnabled(true);
+                isBatchScanning = false;
+                return;
             }
-            processor.clearQueue();
-            processor.addFilesFromFolderRecursive(processor.batchPlusFolder);
-            selectedQueueIndices.clear();
-            juce::Rectangle<int> dragInner = getDragAreaBounds().reduced(16, 10);
-            juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
-            const int kQueueLineHeight = 18;
-            const int kQueueHeaderHeight = 20;
-            int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)processor.queue.size();
-            queueListContent.setSize(queueViewportBounds.getWidth(), juce::jmax(queueViewportBounds.getHeight(), contentH));
-            queueViewport.setVisible(true);
-            dragLabel.setVisible(false);
-            queueLabel.setVisible(false);
-            queueViewport.setBounds(queueViewportBounds);
-            queueListContent.repaint();
-            repaint();
-            batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
-        });
+        }
+
+        juce::File folderToScan = processor.batchPlusFolder;
+        juce::Component::SafePointer<SampleOrganizerEditor> safeThis(this);
+        auto audioFilesPtr = std::make_shared<juce::Array<juce::File>>();
+
+        std::thread([safeThis, folderToScan, audioFilesPtr]() {
+            // Collect audio files on background thread — doesn't block the UI
+            juce::Array<juce::File> allFiles;
+            folderToScan.findChildFiles(allFiles, juce::File::findFiles, true);
+            for (auto& f : allFiles)
+            {
+                juce::String ext = f.getFileExtension().toLowerCase().trimCharactersAtStart(".");
+                if (ext == "wav" || ext == "aif" || ext == "aiff")
+                    audioFilesPtr->add(f);
+            }
+
+            // Hand results back to the message thread for UI update
+            juce::MessageManager::callAsync([safeThis, audioFilesPtr]() {
+                if (safeThis == nullptr) return;
+                safeThis->isBatchScanning = false;
+                safeThis->processor.clearQueue();
+                safeThis->processor.addFiles(*audioFilesPtr);
+                safeThis->selectedQueueIndices.clear();
+                juce::Rectangle<int> dragInner = safeThis->getDragAreaBounds().reduced(16, 10);
+                juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(SampleOrganizerEditor::kBatchPlusRightMargin);
+                const int kQueueLineHeight = 18;
+                const int kQueueHeaderHeight = 20;
+                int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)safeThis->processor.queue.size();
+                safeThis->queueListContent.setSize(queueViewportBounds.getWidth(),
+                                                   juce::jmax(queueViewportBounds.getHeight(), contentH));
+                safeThis->queueViewport.setVisible(true);
+                safeThis->dragLabel.setVisible(false);
+                safeThis->queueLabel.setVisible(false);
+                safeThis->queueViewport.setBounds(queueViewportBounds);
+                safeThis->queueListContent.repaint();
+                safeThis->updateBreadcrumb();
+                safeThis->repaint();
+                safeThis->batchPlusBtn.setEnabled(safeThis->processor.batchPlusFolder.isDirectory());
+            });
+        }).detach();
     };
     // Auto-detect only runs when user clicks Batch+ (not on load), to avoid freezing host and Apple Music permission
     batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
@@ -383,7 +411,13 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
             breadcrumbLabel.setText("Add samples to the queue first.", juce::dontSendNotification);
             return;
         }
-        // Always use the selected pack folder (left sidebar) as destination, not the column browser selection
+        // Always use the selected pack folder (left sidebar) as destination, not the column browser selection.
+        // Prefer the ListBox's actual selected row as the source of truth, fall back to selectedPackIndex.
+        {
+            int listRow = packList.getSelectedRow();
+            if (listRow >= 0 && listRow < packDirs.size())
+                selectedPackIndex = listRow;
+        }
         if (selectedPackIndex >= 0 && selectedPackIndex < packDirs.size())
             processor.currentProcessDirectory = packDirs[selectedPackIndex];
         else
@@ -445,6 +479,22 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
     deviceManager.closeAudioDevice();
 }
 
+juce::Rectangle<int> SampleOrganizerEditor::QueueListContent::getClearBtnBounds() const
+{
+    if (!editor) return {};
+    const int headerHeight = 20;
+    const int btnSize = 15;
+    const int padH = 8;
+    const int gap = 6;
+    auto font = interFont(12.0f, true);
+    auto& q = editor->processor.queue;
+    juce::String header = juce::String(q.size()) + (q.size() == 1 ? " sample in queue" : " samples in queue");
+    int textWidth = (int)font.getStringWidth(header);
+    int btnX = padH + textWidth + gap;
+    int btnY = (headerHeight - btnSize) / 2 - 2;
+    return juce::Rectangle<int>(btnX, btnY, btnSize, btnSize);
+}
+
 void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
 {
     if (!editor) return;
@@ -460,6 +510,13 @@ void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
     g.setFont(interFont(12.0f, true));
     juce::String header = juce::String(q.size()) + (q.size() == 1 ? " sample in queue" : " samples in queue");
     g.drawText(header, padH, headerTopPad, getWidth() - 2 * padH, lineHeight, juce::Justification::topLeft, true);
+    // × clear-queue circle button — sits right after the header text
+    auto clearBtn = getClearBtnBounds();
+    g.setColour(hoveringClearBtn ? textCharcoal.withAlpha(0.30f) : textCharcoal.withAlpha(0.18f));
+    g.fillEllipse(clearBtn.toFloat());
+    g.setColour(hoveringClearBtn ? juce::Colour(0xff1a1a1a) : textCharcoal.withAlpha(0.7f));
+    g.setFont(interFont(10.0f, true));
+    g.drawText(juce::String::fromUTF8("\xc3\x97"), clearBtn, juce::Justification::centred, false);
     // Sample names below, with selection highlight
     g.setFont(interFont(12.0f));
     int y = headerHeight;
@@ -479,6 +536,25 @@ void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
     }
 }
 
+void SampleOrganizerEditor::QueueListContent::mouseMove(const juce::MouseEvent& e)
+{
+    bool over = getClearBtnBounds().contains(e.getPosition());
+    if (over != hoveringClearBtn)
+    {
+        hoveringClearBtn = over;
+        repaint();
+    }
+}
+
+void SampleOrganizerEditor::QueueListContent::mouseExit(const juce::MouseEvent&)
+{
+    if (hoveringClearBtn)
+    {
+        hoveringClearBtn = false;
+        repaint();
+    }
+}
+
 void SampleOrganizerEditor::QueueListContent::mouseDown(const juce::MouseEvent& e)
 {
     if (!editor) return;
@@ -487,6 +563,16 @@ void SampleOrganizerEditor::QueueListContent::mouseDown(const juce::MouseEvent& 
     const int headerHeight = 20;
     const int lineHeight = 18;
     int y = e.getPosition().getY();
+    // × button: clear entire queue
+    if (y < headerHeight && getClearBtnBounds().contains(e.getPosition()))
+    {
+        editor->processor.clearQueue();
+        editor->selectedQueueIndices.clear();
+        editor->dragLabel.setVisible(true);
+        editor->queueViewport.setVisible(false);
+        editor->repaint();
+        return;
+    }
     if (y < headerHeight) return;
     int row = (y - headerHeight) / lineHeight;
     if (row < 0 || row >= q.size()) return;
@@ -736,7 +822,6 @@ void SampleOrganizerEditor::resized()
     batchPlusBtn.setBounds(dragBounds.getRight() - kBatchPlusW - kBatchPlusInsetH,
                            dragBounds.getY() + kBatchPlusTopInset,
                            kBatchPlusW, kBatchPlusH);
-    batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
     batchPlusBtn.toFront(true);
     juce::Rectangle<int> dragInner = dragBounds.reduced(16, 10);
     juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
@@ -782,6 +867,11 @@ void SampleOrganizerEditor::refreshPackList()
     if (selectedPackIndex >= packNames.size())
         selectedPackIndex = packNames.size() > 0 ? 0 : -1;
     packList.updateContent();
+    // Keep the ListBox visual selection in sync so it never drifts from selectedPackIndex
+    if (selectedPackIndex >= 0)
+        packList.selectRow(selectedPackIndex, false, true);
+    else
+        packList.deselectAllRows();
 }
 
 void SampleOrganizerEditor::createNewPack()
@@ -1064,7 +1154,9 @@ void SampleOrganizerEditor::startPackInlineRename(int row)
     if (auto* vp = packList.getViewport())
         rowY -= vp->getViewPosition().getY();
     juce::Rectangle<int> rowRect(listBounds.getX(), listBounds.getY() + rowY, listBounds.getWidth(), kPackRowHeight);
-    juce::Rectangle<int> textRect = rowRect.withTrimmedLeft(kPackPaddingH).withTrimmedRight(32).reduced(0, kPackPaddingV);
+    juce::Rectangle<int> textRect = rowRect.withTrimmedLeft(kPackPaddingH).withTrimmedRight(32);
+    // Give the inline editor a bit more vertical breathing room inside the row.
+    textRect = textRect.reduced(0, kPackPaddingV - 1).expanded(0, 2);
     packRenameEditor.setText(packNames[row], false);
     packRenameEditor.setBounds(textRect);
     packRenameEditor.onFocusLost = [this] { commitPackRename(); };

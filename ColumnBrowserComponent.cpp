@@ -99,12 +99,13 @@ ColumnBrowserComponent::ColumnBrowserComponent()
         }
     }
     renameEditor.setMultiLine(false);
-    renameEditor.setBorder(juce::BorderSize<int>(1));
+    // Inline rename should be a clean white box without a visible grey border.
+    renameEditor.setBorder(juce::BorderSize<int>(0));
     renameEditor.setColour(juce::TextEditor::backgroundColourId, juce::Colours::white);
     renameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
     renameEditor.setColour(juce::TextEditor::highlightColourId, juce::Colour(0xffb0d4f0));
     renameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
-    renameEditor.setColour(juce::TextEditor::outlineColourId, FinderTheme::topBar);
+    renameEditor.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
     renameEditor.onReturnKey = [this] { commitRename(); };
     renameEditor.onEscapeKey = [this] { cancelRename(); };
 }
@@ -163,7 +164,10 @@ void ColumnBrowserComponent::startInlineRename(int column, int row)
     renameEditor.setColour(juce::TextEditor::textColourId, juce::Colour(0xff1a1a1a));
     renameEditor.setColour(juce::TextEditor::highlightedTextColourId, juce::Colour(0xff1a1a1a));
     renameEditor.setText(f.getFileName(), false);
-    renameEditor.setBounds(getTextBoundsForCell(column, row));
+    auto editBounds = getTextBoundsForCell(column, row);
+    // Slightly expand vertically so there is more padding above/below the text.
+    editBounds = editBounds.expanded(0, 2);
+    renameEditor.setBounds(editBounds);
     renameEditor.onFocusLost = [this] { commitRename(); };
     addAndMakeVisible(renameEditor);
     renameEditor.selectAll();
