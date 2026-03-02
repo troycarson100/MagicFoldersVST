@@ -61,7 +61,7 @@ namespace
     }
 }
 
-SettingsOverlayComponent::SettingsOverlayComponent(SampleOrganizerProcessor& proc)
+SettingsOverlayComponent::SettingsOverlayComponent(MagicFoldersProcessor& proc)
     : processor(proc)
 {
     setAlwaysOnTop(true);

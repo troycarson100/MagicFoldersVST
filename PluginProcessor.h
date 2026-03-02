@@ -3,7 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <map>
 
-class SampleOrganizerProcessor : public juce::AudioProcessor
+class MagicFoldersProcessor : public juce::AudioProcessor
 {
 public:
     struct AnalysisResult
@@ -32,8 +32,8 @@ public:
         juce::String suggested_name;  // smart rename from analysis
     };
 
-    SampleOrganizerProcessor();
-    ~SampleOrganizerProcessor() override;
+    MagicFoldersProcessor();
+    ~MagicFoldersProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -42,7 +42,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Sample Organizer"; }
+    const juce::String getName() const override { return "Magic Folders"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
@@ -118,5 +118,5 @@ private:
     juce::AudioTransportSource previewTransport;
     std::unique_ptr<juce::AudioFormatReaderSource> previewReaderSource;
     double previewLengthSeconds = 0.0;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleOrganizerProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MagicFoldersProcessor)
 };

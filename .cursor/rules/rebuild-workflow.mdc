@@ -1,0 +1,20 @@
+---
+description: After any code change, always close and reopen the Standalone app to test
+alwaysApply: true
+---
+
+# Rebuild & Test Workflow
+
+After making any code change, always:
+
+1. Build the project (Standalone, AU, VST3 as needed)
+2. **Kill any running instance, then open the Standalone** (whether or not it was already open):
+   ```bash
+   pkill -x "Magic Folders" 2>/dev/null; sleep 0.5
+   open "/Users/troycarson/Documents/JUCE Projects/MagicFoldersVST/build/MagicFolders_artefacts/Release/Standalone/Magic Folders.app"
+   ```
+   - `pkill` will fail silently if nothing was running — that's fine, `open` still launches it.
+   - Always run both commands together so the app is guaranteed to open after a build.
+3. Wait for it to launch before asking the user to test.
+
+Never skip the `open` command — even if the app wasn't running before.

@@ -111,11 +111,11 @@ static bool isAudioPath(const juce::String& path)
     return lower.endsWith(".wav") || lower.endsWith(".aif") || lower.endsWith(".aiff");
 }
 
-juce::StringArray SampleOrganizerEditor::expandDroppedPaths(const juce::StringArray& list) { return ::expandDroppedPaths(list); }
-bool SampleOrganizerEditor::isAudioPath(const juce::String& path) { return ::isAudioPath(path); }
+juce::StringArray MagicFoldersEditor::expandDroppedPaths(const juce::StringArray& list) { return ::expandDroppedPaths(list); }
+bool MagicFoldersEditor::isAudioPath(const juce::String& path) { return ::isAudioPath(path); }
 
 // --- PackListBox (double-click to rename) ---
-void SampleOrganizerEditor::PackListBox::mouseDoubleClick(const juce::MouseEvent& e)
+void MagicFoldersEditor::PackListBox::mouseDoubleClick(const juce::MouseEvent& e)
 {
     int row = getRowContainingPosition(e.getPosition().getX(), e.getPosition().getY());
     if (onDoubleClickRow && row >= 0)
@@ -124,12 +124,12 @@ void SampleOrganizerEditor::PackListBox::mouseDoubleClick(const juce::MouseEvent
 }
 
 // --- PackListModel ---
-int SampleOrganizerEditor::PackListModel::getNumRows()
+int MagicFoldersEditor::PackListModel::getNumRows()
 {
     return editor.packNames.size();
 }
 
-void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
+void MagicFoldersEditor::PackListModel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected)
 {
     g.fillAll(FinderTheme::sidebarDarkBar);
     if (selected)
@@ -148,7 +148,7 @@ void SampleOrganizerEditor::PackListModel::paintListBoxItem(int row, juce::Graph
         editor.forwardArrowDimmedDrawable->drawWithin(g, juce::Rectangle<float>((float)(w - 24), (float)((h - 14) / 2), 14.0f, 14.0f), juce::RectanglePlacement::centred, 1.0f);
 }
 
-void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
+void MagicFoldersEditor::PackListModel::listBoxItemClicked(int row, const juce::MouseEvent&)
 {
     if (row < 0 || row >= editor.packNames.size()) return;
     editor.selectedPackIndex = row;
@@ -162,8 +162,8 @@ void SampleOrganizerEditor::PackListModel::listBoxItemClicked(int row, const juc
     editor.packList.repaint();
 }
 
-// --- SampleOrganizerEditor ---
-SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
+// --- MagicFoldersEditor ---
+MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     : AudioProcessorEditor(&p), processor(p), packListModel(*this)
 {
     settingsOverlay = std::make_unique<SettingsOverlayComponent>(processor);
@@ -323,8 +323,10 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
         // Guard against re-entry while a scan is already running
         if (isBatchScanning.exchange(true)) return;
         batchPlusBtn.setEnabled(false);
-        breadcrumbLabel.setVisible(true);
-        breadcrumbLabel.setText("Scanning...", juce::dontSendNotification);
+
+        // Show "Scanning..." directly in the drag area so the user can see it
+        dragLabel.setText("Scanning...", juce::dontSendNotification);
+        dragLabel.setVisible(true);
         repaint();
 
         if (!processor.batchPlusFolder.isDirectory())
@@ -332,6 +334,8 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
             processor.tryAutoDetectAbletonSamplesFolder();
             if (!processor.batchPlusFolder.isDirectory())
             {
+                dragLabel.setText("Drag Sample", juce::dontSendNotification);
+                breadcrumbLabel.setVisible(true);
                 breadcrumbLabel.setText("Set Batch + Folder in Settings first.", juce::dontSendNotification);
                 settingsOverlay->syncFromProcessor();
                 settingsOverlay->setVisible(true);
@@ -343,18 +347,35 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
         }
 
         juce::File folderToScan = processor.batchPlusFolder;
-        juce::Component::SafePointer<SampleOrganizerEditor> safeThis(this);
+        juce::Component::SafePointer<MagicFoldersEditor> safeThis(this);
         auto audioFilesPtr = std::make_shared<juce::Array<juce::File>>();
 
         std::thread([safeThis, folderToScan, audioFilesPtr]() {
             // Collect audio files on background thread — doesn't block the UI
-            juce::Array<juce::File> allFiles;
-            folderToScan.findChildFiles(allFiles, juce::File::findFiles, true);
-            for (auto& f : allFiles)
+            try
             {
-                juce::String ext = f.getFileExtension().toLowerCase().trimCharactersAtStart(".");
-                if (ext == "wav" || ext == "aif" || ext == "aiff")
-                    audioFilesPtr->add(f);
+                juce::Array<juce::File> allFiles;
+                folderToScan.findChildFiles(allFiles, juce::File::findFiles, true);
+                for (auto& f : allFiles)
+                {
+                    juce::String ext = f.getFileExtension().toLowerCase().trimCharactersAtStart(".");
+                    if (ext == "wav" || ext == "aif" || ext == "aiff")
+                        audioFilesPtr->add(f);
+                }
+            }
+            catch (...)
+            {
+                // Scan failed (permission denied, I/O error, etc.) — always recover cleanly
+                juce::MessageManager::callAsync([safeThis]() {
+                    if (safeThis == nullptr) return;
+                    safeThis->isBatchScanning = false;
+                    safeThis->dragLabel.setText("Drag Sample", juce::dontSendNotification);
+                    safeThis->dragLabel.setVisible(true);
+                    safeThis->batchPlusBtn.setEnabled(true);
+                    safeThis->updateBreadcrumb();
+                    safeThis->repaint();
+                });
+                return;
             }
 
             // Hand results back to the message thread for UI update
@@ -365,7 +386,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
                 safeThis->processor.addFiles(*audioFilesPtr);
                 safeThis->selectedQueueIndices.clear();
                 juce::Rectangle<int> dragInner = safeThis->getDragAreaBounds().reduced(16, 10);
-                juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(SampleOrganizerEditor::kBatchPlusRightMargin);
+                juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(MagicFoldersEditor::kBatchPlusRightMargin);
                 const int kQueueLineHeight = 18;
                 const int kQueueHeaderHeight = 20;
                 int contentH = kQueueHeaderHeight + kQueueLineHeight * (int)safeThis->processor.queue.size();
@@ -378,7 +399,8 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
                 safeThis->queueListContent.repaint();
                 safeThis->updateBreadcrumb();
                 safeThis->repaint();
-                safeThis->batchPlusBtn.setEnabled(safeThis->processor.batchPlusFolder.isDirectory());
+                // Always re-enable — folder was validated before the thread launched
+                safeThis->batchPlusBtn.setEnabled(true);
             });
         }).detach();
     };
@@ -424,29 +446,36 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
             processor.currentProcessDirectory = processor.outputDirectory;
         if (!processor.currentProcessDirectory.isDirectory())
             processor.currentProcessDirectory = processor.outputDirectory;
+        // Immediately swap queue out and show "Processing Samples..." so the user gets feedback right away
+        queueViewport.setVisible(false);
+        queueLabel.setVisible(false);
+        dragLabel.setText("Processing Samples...", juce::dontSendNotification);
+        dragLabel.setVisible(true);
+        repaint();
         juce::Timer::callAfterDelay(50, [this]() {
             try
             {
                 processor.processAll();
-                breadcrumbLabel.setVisible(true);
-                breadcrumbLabel.setText("Done! " + juce::String(processor.processed.size()) + " samples organized.", juce::dontSendNotification);
                 refreshPackList();
                 columnBrowser.refreshFromDisk();
+                dragLabel.setText("Drag Sample", juce::dontSendNotification);
                 dragLabel.setVisible(true);
-                queueViewport.setVisible(false);
-                queueLabel.setVisible(false);
                 updateBreadcrumb();
                 repaint();
             }
             catch (const std::exception& ex)
             {
+                dragLabel.setText("Drag Sample", juce::dontSendNotification);
                 breadcrumbLabel.setVisible(true);
                 breadcrumbLabel.setText("Error: " + juce::String(ex.what()), juce::dontSendNotification);
+                repaint();
             }
             catch (...)
             {
+                dragLabel.setText("Drag Sample", juce::dontSendNotification);
                 breadcrumbLabel.setVisible(true);
                 breadcrumbLabel.setText("Error: analysis failed.", juce::dontSendNotification);
+                repaint();
             }
         });
     };
@@ -468,7 +497,7 @@ SampleOrganizerEditor::SampleOrganizerEditor(SampleOrganizerProcessor& p)
     }
 }
 
-SampleOrganizerEditor::~SampleOrganizerEditor()
+MagicFoldersEditor::~MagicFoldersEditor()
 {
     if (packListHoverListener)
         removeMouseListener(packListHoverListener.get());
@@ -479,7 +508,7 @@ SampleOrganizerEditor::~SampleOrganizerEditor()
     deviceManager.closeAudioDevice();
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::QueueListContent::getClearBtnBounds() const
+juce::Rectangle<int> MagicFoldersEditor::QueueListContent::getClearBtnBounds() const
 {
     if (!editor) return {};
     const int headerHeight = 20;
@@ -495,7 +524,7 @@ juce::Rectangle<int> SampleOrganizerEditor::QueueListContent::getClearBtnBounds(
     return juce::Rectangle<int>(btnX, btnY, btnSize, btnSize);
 }
 
-void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
+void MagicFoldersEditor::QueueListContent::paint(juce::Graphics& g)
 {
     if (!editor) return;
     auto& q = editor->processor.queue;
@@ -536,7 +565,7 @@ void SampleOrganizerEditor::QueueListContent::paint(juce::Graphics& g)
     }
 }
 
-void SampleOrganizerEditor::QueueListContent::mouseMove(const juce::MouseEvent& e)
+void MagicFoldersEditor::QueueListContent::mouseMove(const juce::MouseEvent& e)
 {
     bool over = getClearBtnBounds().contains(e.getPosition());
     if (over != hoveringClearBtn)
@@ -546,7 +575,7 @@ void SampleOrganizerEditor::QueueListContent::mouseMove(const juce::MouseEvent& 
     }
 }
 
-void SampleOrganizerEditor::QueueListContent::mouseExit(const juce::MouseEvent&)
+void MagicFoldersEditor::QueueListContent::mouseExit(const juce::MouseEvent&)
 {
     if (hoveringClearBtn)
     {
@@ -555,7 +584,7 @@ void SampleOrganizerEditor::QueueListContent::mouseExit(const juce::MouseEvent&)
     }
 }
 
-void SampleOrganizerEditor::QueueListContent::mouseDown(const juce::MouseEvent& e)
+void MagicFoldersEditor::QueueListContent::mouseDown(const juce::MouseEvent& e)
 {
     if (!editor) return;
     auto& q = editor->processor.queue;
@@ -624,7 +653,7 @@ void SampleOrganizerEditor::QueueListContent::mouseDown(const juce::MouseEvent& 
     repaint();
 }
 
-bool SampleOrganizerEditor::QueueListContent::keyPressed(const juce::KeyPress& key)
+bool MagicFoldersEditor::QueueListContent::keyPressed(const juce::KeyPress& key)
 {
     if (!editor || editor->selectedQueueIndices.isEmpty())
         return false;
@@ -636,7 +665,7 @@ bool SampleOrganizerEditor::QueueListContent::keyPressed(const juce::KeyPress& k
     return false;
 }
 
-void SampleOrganizerEditor::removeSelectedQueueItems()
+void MagicFoldersEditor::removeSelectedQueueItems()
 {
     if (selectedQueueIndices.isEmpty()) return;
     juce::Array<juce::File> removedFiles;
@@ -666,7 +695,7 @@ void SampleOrganizerEditor::removeSelectedQueueItems()
     repaint();
 }
 
-void SampleOrganizerEditor::undoLastQueueRemove()
+void MagicFoldersEditor::undoLastQueueRemove()
 {
     if (undoQueueRemoveStack.empty()) return;
     juce::Array<juce::File> files = undoQueueRemoveStack.back();
@@ -686,7 +715,7 @@ void SampleOrganizerEditor::undoLastQueueRemove()
     repaint();
 }
 
-bool SampleOrganizerEditor::keyPressed(const juce::KeyPress& key, juce::Component*)
+bool MagicFoldersEditor::keyPressed(const juce::KeyPress& key, juce::Component*)
 {
     int k = key.getKeyCode();
     if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) && (k == 'z' || k == 'Z'))
@@ -707,7 +736,7 @@ bool SampleOrganizerEditor::keyPressed(const juce::KeyPress& key, juce::Componen
     return false;
 }
 
-void SampleOrganizerEditor::paint(juce::Graphics& g)
+void MagicFoldersEditor::paint(juce::Graphics& g)
 {
     g.fillAll(creamBg);
     int contentBottom = getContentBottom();
@@ -786,7 +815,7 @@ void SampleOrganizerEditor::paint(juce::Graphics& g)
     g.fillRect(0, getHeight() - kThickBorderHeight, getWidth(), kThickBorderHeight);
 }
 
-void SampleOrganizerEditor::resized()
+void MagicFoldersEditor::resized()
 {
     int w = getWidth();
     int h = getHeight();
@@ -849,7 +878,7 @@ void SampleOrganizerEditor::resized()
     settingsOverlay->setBounds(0, 0, w, h);
 }
 
-void SampleOrganizerEditor::refreshPackList()
+void MagicFoldersEditor::refreshPackList()
 {
     packNames.clear();
     packDirs.clear();
@@ -874,7 +903,7 @@ void SampleOrganizerEditor::refreshPackList()
         packList.deselectAllRows();
 }
 
-void SampleOrganizerEditor::createNewPack()
+void MagicFoldersEditor::createNewPack()
 {
     if (!processor.outputDirectory.isDirectory())
     {
@@ -953,7 +982,7 @@ void SampleOrganizerEditor::createNewPack()
     });
 }
 
-void SampleOrganizerEditor::updateForwardButtonState()
+void MagicFoldersEditor::updateForwardButtonState()
 {
     if (pathForward.isEmpty())
         forwardBtn.setImages(forwardArrowDimmedDrawable.get());
@@ -961,7 +990,7 @@ void SampleOrganizerEditor::updateForwardButtonState()
         forwardBtn.setImages(forwardArrowDrawable.get());
 }
 
-void SampleOrganizerEditor::updateBreadcrumb()
+void MagicFoldersEditor::updateBreadcrumb()
 {
     if (!processor.outputDirectory.isDirectory())
     {
@@ -991,12 +1020,12 @@ void SampleOrganizerEditor::updateBreadcrumb()
     repaint();
 }
 
-void SampleOrganizerEditor::pushPathToHistory()
+void MagicFoldersEditor::pushPathToHistory()
 {
     pathHistory.add(columnPath);
 }
 
-void SampleOrganizerEditor::goBack()
+void MagicFoldersEditor::goBack()
 {
     if (!pathHistory.isEmpty())
     {
@@ -1017,7 +1046,7 @@ void SampleOrganizerEditor::goBack()
     repaint();
 }
 
-void SampleOrganizerEditor::goForward()
+void MagicFoldersEditor::goForward()
 {
     if (pathForward.isEmpty()) return;
     pathHistory.add(columnPath);
@@ -1029,7 +1058,7 @@ void SampleOrganizerEditor::goForward()
     repaint();
 }
 
-void SampleOrganizerEditor::PackListHoverListener::mouseMove(const juce::MouseEvent& e)
+void MagicFoldersEditor::PackListHoverListener::mouseMove(const juce::MouseEvent& e)
 {
     if (!editor) return;
     juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
@@ -1040,13 +1069,13 @@ void SampleOrganizerEditor::PackListHoverListener::mouseMove(const juce::MouseEv
     editor->setHoveredPackRow(row >= 0 && row < total ? row : -1);
 }
 
-void SampleOrganizerEditor::PackListHoverListener::mouseExit(const juce::MouseEvent& e)
+void MagicFoldersEditor::PackListHoverListener::mouseExit(const juce::MouseEvent& e)
 {
     if (editor)
         editor->setHoveredPackRow(-1);
 }
 
-void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEvent& e)
+void MagicFoldersEditor::PackListHoverListener::mouseDown(const juce::MouseEvent& e)
 {
     if (!editor) return;
     juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
@@ -1078,7 +1107,7 @@ void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEv
         {
             editor->lastPackClickRow = -1;
             int rowToEdit = row;
-            SampleOrganizerEditor* ed = this->editor;
+            MagicFoldersEditor* ed = this->editor;
             juce::Timer::callAfterDelay(250, [ed, rowToEdit]() {
                 if (ed && ed->isVisible())
                     ed->tryRenamePack(rowToEdit);
@@ -1125,7 +1154,7 @@ void SampleOrganizerEditor::PackListHoverListener::mouseDown(const juce::MouseEv
     });
 }
 
-void SampleOrganizerEditor::PackListHoverListener::mouseDoubleClick(const juce::MouseEvent& e)
+void MagicFoldersEditor::PackListHoverListener::mouseDoubleClick(const juce::MouseEvent& e)
 {
     if (!editor) return;
     juce::Point<int> posInEditor = editor->getLocalPoint(e.eventComponent, e.getPosition());
@@ -1136,12 +1165,12 @@ void SampleOrganizerEditor::PackListHoverListener::mouseDoubleClick(const juce::
         editor->tryRenamePack(row);
 }
 
-void SampleOrganizerEditor::tryRenamePack(int row)
+void MagicFoldersEditor::tryRenamePack(int row)
 {
     startPackInlineRename(row);
 }
 
-void SampleOrganizerEditor::startPackInlineRename(int row)
+void MagicFoldersEditor::startPackInlineRename(int row)
 {
     if (row < 0 || row >= packDirs.size()) return;
     hidePackRenameEditor();
@@ -1170,7 +1199,7 @@ void SampleOrganizerEditor::startPackInlineRename(int row)
     });
 }
 
-void SampleOrganizerEditor::commitPackRename()
+void MagicFoldersEditor::commitPackRename()
 {
     if (editingPackRow < 0 || editingPackRow >= packDirs.size()) { hidePackRenameEditor(); return; }
     juce::File packDir = packDirs[editingPackRow];
@@ -1199,7 +1228,7 @@ void SampleOrganizerEditor::commitPackRename()
     packList.repaint();
 }
 
-void SampleOrganizerEditor::hidePackRenameEditor()
+void MagicFoldersEditor::hidePackRenameEditor()
 {
     if (editingPackRow < 0) return;
     packRenameEditor.onFocusLost = nullptr;
@@ -1209,7 +1238,7 @@ void SampleOrganizerEditor::hidePackRenameEditor()
 }
 
 
-void SampleOrganizerEditor::setHoveredPackRow(int row)
+void MagicFoldersEditor::setHoveredPackRow(int row)
 {
     if (row != hoveredPackRow)
     {
@@ -1218,7 +1247,7 @@ void SampleOrganizerEditor::setHoveredPackRow(int row)
     }
 }
 
-void SampleOrganizerEditor::mouseMove(const juce::MouseEvent& e)
+void MagicFoldersEditor::mouseMove(const juce::MouseEvent& e)
 {
     bool inside = getDragAreaBounds().contains(e.getPosition());
     if (inside != isHoveringDragArea)
@@ -1228,7 +1257,7 @@ void SampleOrganizerEditor::mouseMove(const juce::MouseEvent& e)
     }
 }
 
-void SampleOrganizerEditor::mouseEnter(const juce::MouseEvent& e)
+void MagicFoldersEditor::mouseEnter(const juce::MouseEvent& e)
 {
     if (e.eventComponent == &dragArea && !isHoveringDragArea)
     {
@@ -1237,7 +1266,7 @@ void SampleOrganizerEditor::mouseEnter(const juce::MouseEvent& e)
     }
 }
 
-void SampleOrganizerEditor::mouseExit(const juce::MouseEvent&)
+void MagicFoldersEditor::mouseExit(const juce::MouseEvent&)
 {
     if (isHoveringDragArea)
     {
@@ -1246,12 +1275,12 @@ void SampleOrganizerEditor::mouseExit(const juce::MouseEvent&)
     }
 }
 
-void SampleOrganizerEditor::mouseDown(const juce::MouseEvent& e)
+void MagicFoldersEditor::mouseDown(const juce::MouseEvent& e)
 {
     handleBreadcrumbClick(e.getPosition().getX(), e.getPosition().getY());
 }
 
-void SampleOrganizerEditor::handleBreadcrumbClick(int x, int y)
+void MagicFoldersEditor::handleBreadcrumbClick(int x, int y)
 {
     juce::Rectangle<int> header = getHeaderBounds();
     if (!header.contains(x, y))
@@ -1290,7 +1319,7 @@ void SampleOrganizerEditor::handleBreadcrumbClick(int x, int y)
     updateForwardButtonState();
 }
 
-void SampleOrganizerEditor::playSelectedFile()
+void MagicFoldersEditor::playSelectedFile()
 {
     juce::File file = columnBrowser.getSelectedFileInLastColumn();
     if (!file.existsAsFile()) return;
@@ -1320,7 +1349,7 @@ void SampleOrganizerEditor::playSelectedFile()
     startTimer(100);
 }
 
-void SampleOrganizerEditor::AudioPreviewStrip::PlayPauseButton::paintButton(juce::Graphics& g, bool highlighted, bool)
+void MagicFoldersEditor::AudioPreviewStrip::PlayPauseButton::paintButton(juce::Graphics& g, bool highlighted, bool)
 {
     g.fillAll(FinderTheme::topBar);
     if (highlighted)
@@ -1379,7 +1408,7 @@ namespace
     };
 }
 
-SampleOrganizerEditor::AudioPreviewStrip::AudioPreviewStrip()
+MagicFoldersEditor::AudioPreviewStrip::AudioPreviewStrip()
 {
     scrubBarLook = std::make_unique<ScrubBarLookAndFeel>();
     playPauseBtn.onClick = [this] {
@@ -1412,12 +1441,12 @@ SampleOrganizerEditor::AudioPreviewStrip::AudioPreviewStrip()
     setOpaque(true);
 }
 
-SampleOrganizerEditor::AudioPreviewStrip::~AudioPreviewStrip()
+MagicFoldersEditor::AudioPreviewStrip::~AudioPreviewStrip()
 {
     scrubSlider.setLookAndFeel(nullptr);
 }
 
-void SampleOrganizerEditor::AudioPreviewStrip::resized()
+void MagicFoldersEditor::AudioPreviewStrip::resized()
 {
     auto r = getLocalBounds().reduced(8);
     const int btnW = 24;
@@ -1425,7 +1454,7 @@ void SampleOrganizerEditor::AudioPreviewStrip::resized()
     scrubSlider.setBounds(r.reduced(4, 6));
 }
 
-void SampleOrganizerEditor::AudioPreviewStrip::paint(juce::Graphics& g)
+void MagicFoldersEditor::AudioPreviewStrip::paint(juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
     g.setColour(FinderTheme::topBar);
@@ -1434,32 +1463,32 @@ void SampleOrganizerEditor::AudioPreviewStrip::paint(juce::Graphics& g)
     g.drawRoundedRectangle(bounds.reduced(0.5f), 5.0f, 1.0f);
 }
 
-void SampleOrganizerEditor::AudioPreviewStrip::setPlayPauseLabel(bool playing)
+void MagicFoldersEditor::AudioPreviewStrip::setPlayPauseLabel(bool playing)
 {
     playPauseBtn.showingPlay = !playing;
     playPauseBtn.repaint();
 }
 
-void SampleOrganizerEditor::AudioPreviewStrip::updateScrubFromTransport()
+void MagicFoldersEditor::AudioPreviewStrip::updateScrubFromTransport()
 {
     if (!editor) return;
     if (auto* transport = editor->processor.getPreviewTransport())
         scrubSlider.setValue(transport->getCurrentPosition(), juce::dontSendNotification);
 }
 
-void SampleOrganizerEditor::showAudioPreview(int row)
+void MagicFoldersEditor::showAudioPreview(int row)
 {
     (void)row;
     // No popup strip – playback is controlled only by the inline play/pause icon next to each sample.
     // Strip is kept hidden; do not call setVisible(true) here.
 }
 
-void SampleOrganizerEditor::hideAudioPreview()
+void MagicFoldersEditor::hideAudioPreview()
 {
     audioPreviewStrip.setVisible(false);
 }
 
-void SampleOrganizerEditor::collapseAudioPreview()
+void MagicFoldersEditor::collapseAudioPreview()
 {
     columnBrowser.setExpandedPreviewRow(-1);
     columnBrowser.setPlayingFilePath({});
@@ -1470,7 +1499,7 @@ void SampleOrganizerEditor::collapseAudioPreview()
     columnBrowser.repaint();
 }
 
-void SampleOrganizerEditor::timerCallback()
+void MagicFoldersEditor::timerCallback()
 {
     auto* transport = processor.getPreviewTransport();
     if (transport && !transport->isPlaying() && !playingFilePath.isEmpty())
@@ -1483,49 +1512,49 @@ void SampleOrganizerEditor::timerCallback()
     }
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getLogoPanelBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getLogoPanelBounds() const
 {
     return juce::Rectangle<int>(0, 0, kLogoPanelWidth, kHeaderHeight);
 }
 
-int SampleOrganizerEditor::getContentBottom() const
+int MagicFoldersEditor::getContentBottom() const
 {
     return getHeight() - kDragAreaHeight - kProcessButtonHeight - 2 * kDragAreaPaddingVertical;
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getPackListBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getPackListBounds() const
 {
     int contentBottom = getContentBottom();
     return juce::Rectangle<int>(0, kHeaderHeight, kSidebarWidth, contentBottom - kHeaderHeight);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getHeaderBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getHeaderBounds() const
 {
     return juce::Rectangle<int>(kLogoPanelWidth + 1, 0, getWidth() - kLogoPanelWidth - 1, kHeaderHeight);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getColumnBrowserBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getColumnBrowserBounds() const
 {
     int contentTop = kHeaderHeight;
     int contentBottom = getContentBottom();
     return juce::Rectangle<int>(kSidebarWidth, contentTop, getWidth() - kSidebarWidth, contentBottom - contentTop);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getDragAreaBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getDragAreaBounds() const
 {
     int contentBottom = getContentBottom();
     int y = contentBottom + kDragAreaPaddingVertical;
     return juce::Rectangle<int>(kDragAreaPadding, y, getWidth() - 2 * kDragAreaPadding, kDragAreaHeight);
 }
 
-juce::Rectangle<int> SampleOrganizerEditor::getProcessButtonBounds() const
+juce::Rectangle<int> MagicFoldersEditor::getProcessButtonBounds() const
 {
     int contentBottom = getContentBottom();
     int y = contentBottom + kDragAreaPaddingVertical + kDragAreaHeight + kDragAreaPaddingVertical;
     return juce::Rectangle<int>(0, y, getWidth(), kProcessButtonHeight);
 }
 
-bool SampleOrganizerEditor::isInterestedInFileDrag(const juce::StringArray& files)
+bool MagicFoldersEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
     juce::StringArray expanded = expandDroppedPaths(files);
     for (const auto& f : expanded)
@@ -1533,7 +1562,7 @@ bool SampleOrganizerEditor::isInterestedInFileDrag(const juce::StringArray& file
     return false;
 }
 
-void SampleOrganizerEditor::fileDragEnter(const juce::StringArray&, int x, int y)
+void MagicFoldersEditor::fileDragEnter(const juce::StringArray&, int x, int y)
 {
     if (getDragAreaBounds().contains(x, y) && !isDragOver)
     {
@@ -1542,18 +1571,18 @@ void SampleOrganizerEditor::fileDragEnter(const juce::StringArray&, int x, int y
     }
 }
 
-void SampleOrganizerEditor::fileDragMove(const juce::StringArray&, int x, int y)
+void MagicFoldersEditor::fileDragMove(const juce::StringArray&, int x, int y)
 {
     bool in = getDragAreaBounds().contains(x, y);
     if (in != isDragOver) { isDragOver = in; repaint(); }
 }
 
-void SampleOrganizerEditor::fileDragExit(const juce::StringArray&)
+void MagicFoldersEditor::fileDragExit(const juce::StringArray&)
 {
     if (isDragOver) { isDragOver = false; repaint(); }
 }
 
-void SampleOrganizerEditor::filesDropped(const juce::StringArray& files, int, int)
+void MagicFoldersEditor::filesDropped(const juce::StringArray& files, int, int)
 {
     isDragOver = false;
     repaint();

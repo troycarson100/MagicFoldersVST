@@ -8,7 +8,7 @@
 class SettingsOverlayComponent : public juce::Component
 {
 public:
-    explicit SettingsOverlayComponent(SampleOrganizerProcessor& proc);
+    explicit SettingsOverlayComponent(MagicFoldersProcessor& proc);
     void paint(juce::Graphics& g) override;
     void resized() override;
 
@@ -16,7 +16,7 @@ public:
     void syncFromProcessor();
 
 private:
-    SampleOrganizerProcessor& processor;
+    MagicFoldersProcessor& processor;
     std::unique_ptr<juce::Drawable> closeIconDrawable;
     juce::DrawableButton closeBtn { "Close", juce::DrawableButton::ImageFitted };
 

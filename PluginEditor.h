@@ -7,15 +7,15 @@
 #include "ColumnBrowserComponent.h"
 #include "SettingsOverlayComponent.h"
 
-class SampleOrganizerEditor : public juce::AudioProcessorEditor,
+class MagicFoldersEditor : public juce::AudioProcessorEditor,
                               public juce::FileDragAndDropTarget,
                               public juce::DragAndDropContainer,
                               public juce::KeyListener,
                               public juce::Timer
 {
 public:
-    SampleOrganizerEditor(SampleOrganizerProcessor&);
-    ~SampleOrganizerEditor() override;
+    MagicFoldersEditor(MagicFoldersProcessor&);
+    ~MagicFoldersEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -27,7 +27,7 @@ public:
     void filesDropped(const juce::StringArray& files, int x, int y) override;
 
 private:
-    SampleOrganizerProcessor& processor;
+    MagicFoldersProcessor& processor;
 
     static constexpr int kLogoPanelWidth = 220;
     static constexpr int kSidebarWidth = 220;
@@ -58,12 +58,12 @@ private:
     class PackListModel : public juce::ListBoxModel
     {
     public:
-        explicit PackListModel(SampleOrganizerEditor& e) : editor(e) {}
+        explicit PackListModel(MagicFoldersEditor& e) : editor(e) {}
         int getNumRows() override;
         void paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) override;
         void listBoxItemClicked(int row, const juce::MouseEvent&) override;
     private:
-        SampleOrganizerEditor& editor;
+        MagicFoldersEditor& editor;
     };
     PackListModel packListModel;
     juce::TextButton sidebarPlaceholderBtn;
@@ -104,7 +104,7 @@ private:
     juce::Viewport queueViewport;
     struct QueueListContent : juce::Component
     {
-        SampleOrganizerEditor* editor = nullptr;
+        MagicFoldersEditor* editor = nullptr;
         bool hoveringClearBtn = false;
         void paint(juce::Graphics& g) override;
         void mouseDown(const juce::MouseEvent& e) override;
@@ -146,7 +146,7 @@ private:
             PlayPauseButton() : juce::Button({}) {}
             void paintButton(juce::Graphics& g, bool, bool) override;
         };
-        SampleOrganizerEditor* editor = nullptr;
+        MagicFoldersEditor* editor = nullptr;
         PlayPauseButton playPauseBtn;
         juce::Slider scrubSlider;
         std::unique_ptr<juce::LookAndFeel> scrubBarLook;
@@ -178,7 +178,7 @@ private:
 
     struct PackListHoverListener : juce::MouseListener
     {
-        SampleOrganizerEditor* editor = nullptr;
+        MagicFoldersEditor* editor = nullptr;
         void mouseMove(const juce::MouseEvent& e) override;
         void mouseExit(const juce::MouseEvent& e) override;
         void mouseDown(const juce::MouseEvent& e) override;
@@ -201,5 +201,5 @@ private:
     static juce::StringArray expandDroppedPaths(const juce::StringArray& list);
     static bool isAudioPath(const juce::String& path);
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleOrganizerEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MagicFoldersEditor)
 };

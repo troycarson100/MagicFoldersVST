@@ -11,7 +11,7 @@
 using namespace essentia;
 using namespace essentia::standard;
 
-SampleOrganizerProcessor::SampleOrganizerProcessor()
+MagicFoldersProcessor::MagicFoldersProcessor()
     : previewTransport()
 {
     setPlayConfigDetails(0, 2, 44100.0, 512);
@@ -19,26 +19,26 @@ SampleOrganizerProcessor::SampleOrganizerProcessor()
     essentia::init();
 }
 
-SampleOrganizerProcessor::~SampleOrganizerProcessor()
+MagicFoldersProcessor::~MagicFoldersProcessor()
 {
     stopPreview();
     previewReadAheadThread.stopThread(2000);
     essentia::shutdown();
 }
 
-void SampleOrganizerProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+void MagicFoldersProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     previewSampleRate = sampleRate;
     previewBlockSize = samplesPerBlock;
     previewTransport.prepareToPlay(samplesPerBlock, sampleRate);
 }
 
-void SampleOrganizerProcessor::releaseResources()
+void MagicFoldersProcessor::releaseResources()
 {
     previewTransport.releaseResources();
 }
 
-void SampleOrganizerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void MagicFoldersProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     buffer.clear();
     if (previewReaderSource == nullptr)
@@ -47,7 +47,7 @@ void SampleOrganizerProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
     previewTransport.getNextAudioBlock(info);
 }
 
-void SampleOrganizerProcessor::setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds)
+void MagicFoldersProcessor::setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds)
 {
     previewTransport.setSource(nullptr);
     previewReaderSource = std::move(source);
@@ -61,7 +61,7 @@ void SampleOrganizerProcessor::setPreviewSource(std::unique_ptr<juce::AudioForma
     }
 }
 
-void SampleOrganizerProcessor::startPreview()
+void MagicFoldersProcessor::startPreview()
 {
     if (previewReaderSource)
     {
@@ -70,7 +70,7 @@ void SampleOrganizerProcessor::startPreview()
     }
 }
 
-void SampleOrganizerProcessor::stopPreview()
+void MagicFoldersProcessor::stopPreview()
 {
     previewTransport.stop();
     previewTransport.setSource(nullptr);
@@ -78,22 +78,22 @@ void SampleOrganizerProcessor::stopPreview()
     previewLengthSeconds = 0.0;
 }
 
-juce::AudioProcessorEditor* SampleOrganizerProcessor::createEditor()
+juce::AudioProcessorEditor* MagicFoldersProcessor::createEditor()
 {
-    return new SampleOrganizerEditor(*this);
+    return new MagicFoldersEditor(*this);
 }
 
-void SampleOrganizerProcessor::setOutputDirectory(const juce::File& dir)
+void MagicFoldersProcessor::setOutputDirectory(const juce::File& dir)
 {
     outputDirectory = dir;
 }
 
-void SampleOrganizerProcessor::setBatchPlusFolder(const juce::File& dir)
+void MagicFoldersProcessor::setBatchPlusFolder(const juce::File& dir)
 {
     batchPlusFolder = dir;
 }
 
-void SampleOrganizerProcessor::tryAutoDetectAbletonSamplesFolder()
+void MagicFoldersProcessor::tryAutoDetectAbletonSamplesFolder()
 {
     if (batchPlusFolder.isDirectory())
         return;
@@ -134,7 +134,7 @@ void SampleOrganizerProcessor::tryAutoDetectAbletonSamplesFolder()
         batchPlusFolder = bestSamples;
 }
 
-void SampleOrganizerProcessor::getStateInformation(juce::MemoryBlock& destData)
+void MagicFoldersProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::MemoryOutputStream os(destData, true);
     os.writeString(outputDirectory.getFullPathName());
@@ -142,7 +142,7 @@ void SampleOrganizerProcessor::getStateInformation(juce::MemoryBlock& destData)
     os.writeString(generateFunNames ? "1" : "0");
 }
 
-void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInBytes)
+void MagicFoldersProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     if (data == nullptr || sizeInBytes <= 0)
         return;
@@ -171,7 +171,7 @@ void SampleOrganizerProcessor::setStateInformation(const void* data, int sizeInB
     }
 }
 
-void SampleOrganizerProcessor::addFiles(const juce::Array<juce::File>& files)
+void MagicFoldersProcessor::addFiles(const juce::Array<juce::File>& files)
 {
     for (auto& f : files)
     {
@@ -197,7 +197,7 @@ void SampleOrganizerProcessor::addFiles(const juce::Array<juce::File>& files)
     }
 }
 
-void SampleOrganizerProcessor::addFilesFromFolder(const juce::File& directory)
+void MagicFoldersProcessor::addFilesFromFolder(const juce::File& directory)
 {
     if (!directory.isDirectory())
         return;
@@ -213,7 +213,7 @@ void SampleOrganizerProcessor::addFilesFromFolder(const juce::File& directory)
     addFiles(audioFiles);
 }
 
-void SampleOrganizerProcessor::addFilesFromFolderRecursive(const juce::File& directory)
+void MagicFoldersProcessor::addFilesFromFolderRecursive(const juce::File& directory)
 {
     if (!directory.isDirectory())
         return;
@@ -229,7 +229,7 @@ void SampleOrganizerProcessor::addFilesFromFolderRecursive(const juce::File& dir
     addFiles(audioFiles);
 }
 
-juce::String SampleOrganizerProcessor::detectCategory(const juce::String& fn)
+juce::String MagicFoldersProcessor::detectCategory(const juce::String& fn)
 {
     if (fn.contains("kick") || fn.contains("bd") || fn.contains("bass drum")) return "Kicks";
     if (fn.contains("snare") || fn.contains("snr") || fn.contains("clap")) return "Snares";
@@ -243,7 +243,7 @@ juce::String SampleOrganizerProcessor::detectCategory(const juce::String& fn)
     return "Other";
 }
 
-juce::String SampleOrganizerProcessor::detectType(const juce::String& fn)
+juce::String MagicFoldersProcessor::detectType(const juce::String& fn)
 {
     if (fn.contains("loop") || fn.contains("lp_") || fn.contains("_lp")) return "Loop";
     return "One-Shot";
@@ -253,7 +253,7 @@ namespace
 {
     /** Lightweight filename-based hints to refine ambiguous analysis results.
         Only meant to gently steer between Guitar/Bass/Melodic/Textures, not override clear drum/FX hits. */
-    void applyFilenameHints(const juce::File& file, SampleOrganizerProcessor::AnalysisResult& result)
+    void applyFilenameHints(const juce::File& file, MagicFoldersProcessor::AnalysisResult& result)
     {
         const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
 
@@ -380,7 +380,7 @@ namespace
     static constexpr bool kLogAnalysisDebug = false;
 
     void logAnalysisDebug(const juce::File& file,
-                          const SampleOrganizerProcessor::AnalysisResult& result,
+                          const MagicFoldersProcessor::AnalysisResult& result,
                           double duration,
                           int onsetCount,
                           float centroidF,
@@ -413,7 +413,7 @@ namespace
     }
 }
 
-void SampleOrganizerProcessor::processAll()
+void MagicFoldersProcessor::processAll()
 {
     juce::File targetDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
     if (!targetDir.isDirectory()) return;
@@ -449,10 +449,10 @@ void SampleOrganizerProcessor::processAll()
     if (onComplete) onComplete();
 }
 
-bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
+bool MagicFoldersProcessor::copyToFolder(SampleInfo& info)
 {
     juce::File baseDir = (currentProcessDirectory.isDirectory() ? currentProcessDirectory : outputDirectory);
-    // Default structure: Pack Name / Loop | One-Shot / Category (instruments) / files
+    // Default structure: Pack Name / Loop | One-Shot / [Drums /] Category / files
     juce::String typeFolderName = (info.type == "Loop") ? "Loop" : "One-Shot";
     juce::File typeFolder = baseDir.getChildFile(typeFolderName);
     typeFolder.createDirectory();
@@ -460,7 +460,19 @@ bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
     juce::String categoryFolderName = info.category;
     if (info.type == "Loop" && categoryFolderName == "Loops")
         categoryFolderName = "Melodic";
-    juce::File folder = typeFolder.getChildFile(categoryFolderName);
+    // Drum categories are grouped under a "Drums" subfolder
+    static const juce::StringArray kDrumCategories { "Kicks", "Snares", "Hi-Hats", "Percussion", "Claps" };
+    juce::File folder;
+    if (kDrumCategories.contains(categoryFolderName))
+    {
+        juce::File drumsFolder = typeFolder.getChildFile("Drums");
+        drumsFolder.createDirectory();
+        folder = drumsFolder.getChildFile(categoryFolderName);
+    }
+    else
+    {
+        folder = typeFolder.getChildFile(categoryFolderName);
+    }
     folder.createDirectory();
 
     juce::String ext = info.sourceFile.getFileExtension().trimCharactersAtStart(".").toLowerCase();
@@ -501,7 +513,7 @@ bool SampleOrganizerProcessor::copyToFolder(SampleInfo& info)
     return info.success;
 }
 
-SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(const juce::File& file, double hostBpmOverride)
+MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const juce::File& file, double hostBpmOverride)
 {
     AnalysisResult result;
 
@@ -833,12 +845,12 @@ SampleOrganizerProcessor::AnalysisResult SampleOrganizerProcessor::analyzeAudio(
     return result;
 }
 
-void SampleOrganizerProcessor::clearQueue()
+void MagicFoldersProcessor::clearQueue()
 {
     queue.clear();
 }
 
-void SampleOrganizerProcessor::removeQueueItemsAt(const juce::Array<int>& indices)
+void MagicFoldersProcessor::removeQueueItemsAt(const juce::Array<int>& indices)
 {
     if (indices.isEmpty() || queue.isEmpty())
         return;
@@ -854,5 +866,5 @@ void SampleOrganizerProcessor::removeQueueItemsAt(const juce::Array<int>& indice
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new SampleOrganizerProcessor();
+    return new MagicFoldersProcessor();
 }
