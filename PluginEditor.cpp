@@ -321,8 +321,14 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     batchPlusBtn.setColour(juce::DrawableButton::backgroundOnColourId, juce::Colours::transparentBlack);
     batchPlusBtn.onClick = [this] {
         // Guard against re-entry while a scan is already running
-        if (isBatchScanning.exchange(true)) return;
+        if (isBatchScanning.exchange(true)) {
+            dragLabel.setText("Scanning...", juce::dontSendNotification);
+            dragLabel.setVisible(true);
+            repaint();
+            return;
+        }
         batchPlusBtn.setEnabled(false);
+        batchPlusBtn.repaint();
 
         // Show "Scanning..." directly in the drag area so the user can see it
         dragLabel.setText("Scanning...", juce::dontSendNotification);
@@ -372,6 +378,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
                     safeThis->dragLabel.setText("Drag Sample", juce::dontSendNotification);
                     safeThis->dragLabel.setVisible(true);
                     safeThis->batchPlusBtn.setEnabled(true);
+                    safeThis->batchPlusBtn.toFront(true);
                     safeThis->updateBreadcrumb();
                     safeThis->repaint();
                 });
@@ -401,6 +408,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
                 safeThis->repaint();
                 // Always re-enable — folder was validated before the thread launched
                 safeThis->batchPlusBtn.setEnabled(true);
+                safeThis->batchPlusBtn.toFront(true);
             });
         }).detach();
     };
@@ -1132,6 +1140,17 @@ void MagicFoldersEditor::PackListHoverListener::mouseDown(const juce::MouseEvent
         }
         editor->lastPackClickRow = row;
         editor->lastPackClickTime = now;
+        // Guarantee selection on single click (ListBox may not receive the event)
+        editor->selectedPackIndex = row;
+        editor->columnPath.clear();
+        editor->pathHistory.clear();
+        editor->pathForward.clear();
+        if (row >= 0 && row < editor->packDirs.size())
+            editor->columnBrowser.setRootFolder(editor->packDirs[row]);
+        editor->columnBrowser.setPath(editor->columnPath);
+        editor->updateBreadcrumb();
+        editor->packList.selectRow(row, false, true);
+        editor->packList.repaint();
         return;
     }
     juce::File packDir = editor->packDirs[row];

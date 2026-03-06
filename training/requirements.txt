@@ -1,0 +1,15 @@
+# Magic Folders instrument classifier – train and export to ONNX
+# Run: pip install -r requirements.txt
+# Or in Colab: !pip install -r requirements.txt (after uploading)
+
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.20.0
+scipy>=1.7.0
+onnx>=1.14.0
+onnxscript>=0.6.0
+soundfile>=0.12.0
+
+# Freesound fetcher and correction script
+requests>=2.25.0
+python-dotenv>=1.0.0

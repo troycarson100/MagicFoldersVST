@@ -1,5 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Source/Detection/HeuristicConstants.h"
+#include "Source/Detection/HeuristicCategory.h"
+#include "Source/Detection/DetectionPipeline.h"
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -265,6 +268,7 @@ void MagicFoldersProcessor::getStateInformation(juce::MemoryBlock& destData)
     os.writeString(outputDirectory.getFullPathName());
     os.writeString(batchPlusFolder.getFullPathName());
     os.writeString(generateFunNames ? "1" : "0");
+    os.writeString(useAccurateDetection ? "1" : "0");
 }
 
 void MagicFoldersProcessor::setStateInformation(const void* data, int sizeInBytes)
@@ -293,6 +297,11 @@ void MagicFoldersProcessor::setStateInformation(const void* data, int sizeInByte
     {
         path = is.readString();
         generateFunNames = (path == "1");
+    }
+    if (is.getNumBytesRemaining() > 0)
+    {
+        path = is.readString();
+        useAccurateDetection = (path == "1");
     }
 }
 
@@ -376,133 +385,82 @@ juce::String MagicFoldersProcessor::detectType(const juce::String& fn)
 
 namespace
 {
-    /** Lightweight filename-based hints to refine ambiguous analysis results.
-        Only meant to gently steer between Guitar/Bass/Melodic/Textures, not override clear drum/FX hits. */
-    void applyFilenameHints(const juce::File& file, MagicFoldersProcessor::AnalysisResult& result)
+    enum class CoarseType
     {
-        const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
+        Drum,
+        Tonal,
+        NoiseFx,
+        Unknown
+    };
 
-        const bool nameSuggestsGuitar =
-            lowerName.contains("gtr") || lowerName.contains("guitar") ||
-            lowerName.contains("egtr") || lowerName.contains("agtr") ||
-            lowerName.contains("eg_") || lowerName.contains("ag_") ||
-            lowerName.contains("strum") || lowerName.contains("strummed") ||
-            lowerName.contains("riff") || lowerName.contains("chug") ||
-            lowerName.contains("palm") || lowerName.contains("powerchord") ||
-            lowerName.contains("power_chord") || lowerName.contains("rhythm") ||
-            lowerName.contains("pluck") || lowerName.contains("chord");
-
-        const bool nameSuggestsBass =
-            lowerName.contains("bass") || lowerName.contains("808") ||
-            lowerName.contains("sub") || lowerName.contains("lowend") ||
-            lowerName.contains("bs_") || lowerName.contains("bss") ||
-            lowerName.contains("subdrop") || lowerName.contains("sub_drop") ||
-            lowerName.contains("slide");
-
-        const bool nameSuggestsTexture =
-            lowerName.contains("texture") || lowerName.contains("atmo") ||
-            lowerName.contains("atmos") || lowerName.contains("ambience") ||
-            lowerName.contains("ambient") || lowerName.contains("drone") ||
-            lowerName.contains("noise") || lowerName.contains("fx");
-
-        const bool nameSuggestsMelodic =
-            lowerName.contains("melod") || lowerName.contains("lead") ||
-            lowerName.contains("keys") || lowerName.contains("piano") ||
-            lowerName.contains("synth") || lowerName.contains("arp") ||
-            lowerName.contains("pluck") || lowerName.contains("hook");
-
-        // Only nudge loops; one-shots are already handled well by attack-based rules.
-        if (result.type != "Loop")
-            return;
-
-        // If the filename is clearly an instrument, prefer that over a generic bucket.
-        if (result.category == "Textures" || result.category == "Melodic" || result.category == "Other" || result.category == "Loops")
-        {
-            if (nameSuggestsGuitar)
-            {
-                result.category = "Guitar";
-                return;
-            }
-            if (nameSuggestsBass)
-            {
-                result.category = "Bass";
-                return;
-            }
-        }
-
-        // For ambiguous \"Textures\" / \"Other\", lean toward Melodic when the name sounds musical.
-        if ((result.category == "Textures" || result.category == "Other" || result.category == "Loops") && nameSuggestsMelodic && !nameSuggestsTexture)
-        {
-            result.category = "Melodic";
-            return;
-        }
-
-        // Only keep Textures when either the name explicitly calls it out or no strong melodic hints exist.
-        if (result.category == "Textures" && nameSuggestsTexture && !nameSuggestsMelodic && !nameSuggestsGuitar && !nameSuggestsBass)
-        {
-            return;
-        }
-        if (result.category == "Textures" && (nameSuggestsGuitar || nameSuggestsBass || nameSuggestsMelodic))
-        {
-            if (nameSuggestsGuitar)      result.category = "Guitar";
-            else if (nameSuggestsBass)   result.category = "Bass";
-            else                         result.category = "Melodic";
-        }
+    static bool isDrumCategory(const juce::String& cat)
+    {
+        return cat == "Kicks"
+            || cat == "Snares"
+            || cat == "Hi-Hats"
+            || cat == "Percussion"
+            || cat == "Claps";
     }
 
-    /** Decide whether a loop is a good candidate for \"Textures\" based purely on audio features. */
-    bool isNoisyTextureCandidate(bool hasSharpAttack,
-                                 double duration,
-                                 float centroidF,
-                                 float zcrF,
-                                 float rolloffF,
-                                 const std::vector<essentia::Real>& onsetTimes)
+    static CoarseType coarseTypeFromCategory(const juce::String& category,
+                                             bool isTonal,
+                                             const juce::String& type)
     {
-        const int onsetCount = (int) onsetTimes.size();
-        const bool veryFewOnsets = onsetCount <= 4;
-        const bool quiteLong = duration >= 3.0;
-        const bool darkAndSoft = !hasSharpAttack && centroidF < 1800.0f && zcrF < 0.12f;
-        const bool noisySwish = zcrF > 0.18f && rolloffF > 6000.0f;
+        if (isDrumCategory(category))
+            return CoarseType::Drum;
 
-        // Long, sparse, dark pads or noisy swishes without much transient structure.
-        return (quiteLong && veryFewOnsets && darkAndSoft) || noisySwish;
+        if (category == "Bass"
+            || category == "Guitar"
+            || category == "Melodic"
+            || category == "Songstarter")
+            return CoarseType::Tonal;
+
+        if (category == "FX" || category == "Textures")
+            return CoarseType::NoiseFx;
+
+        if (category == "Loops")
+        {
+            if (isTonal)
+                return CoarseType::Tonal;
+            return CoarseType::NoiseFx;
+        }
+
+        juce::ignoreUnused(type);
+        return CoarseType::Unknown;
     }
 
-    /** Heuristic detector for guitar-like loops: tonal, plucked attacks, mid-centric spectrum, moderate onset density. */
-    bool isGuitarLikeLoop(bool isTonal,
-                          bool hasSharpAttack,
-                          double duration,
-                          float centroidF,
-                          float zcrF,
-                          int onsetCount)
+    static CoarseType coarseTypeFromClass(Detection::Class c)
     {
-        if (!isTonal)
-            return false;
+        using Detection::Class;
+        switch (c)
+        {
+            case Class::Kick:
+            case Class::Snare:
+            case Class::HiHat:
+            case Class::Perc:
+                return CoarseType::Drum;
 
-        // Broad but reasonable musical loop duration.
-        if (duration < 0.75 || duration > 16.0)
-            return false;
+            case Class::Bass:
+            case Class::Guitar:
+            case Class::Keys:
+            case Class::Pad:
+            case Class::Lead:
+            case Class::Vocal:
+                return CoarseType::Tonal;
 
-        if (onsetCount < 2 || onsetCount > 48)
-            return false;
+            case Class::FX:
+            case Class::TextureAtmos:
+                return CoarseType::NoiseFx;
 
-        // Allow both sharper rhythm parts and softer picked patterns.
-        const bool rhythmGuitar =
-            hasSharpAttack &&
-            centroidF >= 300.0f && centroidF <= 5500.0f &&
-            zcrF < 0.22f;
-
-        const bool pickedGuitar =
-            !hasSharpAttack &&
-            onsetCount >= 4 &&
-            centroidF >= 250.0f && centroidF <= 4500.0f &&
-            zcrF < 0.25f;
-
-        return rhythmGuitar || pickedGuitar;
+            case Class::Other:
+            case Class::Count:
+            default:
+                return CoarseType::Unknown;
+        }
     }
 
     // Toggleable debug logging to help tune thresholds against real-world packs.
-    static constexpr bool kLogAnalysisDebug = false;
+    static constexpr bool kLogAnalysisDebug = true;
 
     void logAnalysisDebug(const juce::File& file,
                           const MagicFoldersProcessor::AnalysisResult& result,
@@ -523,8 +481,6 @@ namespace
         msg << "[Analysis] "
             << file.getFileName() << " | type=" << result.type
             << " category=" << result.category
-            << " bpm=" << result.bpm
-            << " key=" << result.key
             << " dur=" << juce::String(duration, 2)
             << " onsets=" << onsetCount
             << " centroid=" << juce::String(centroidF, 1)
@@ -532,9 +488,49 @@ namespace
             << " rolloff=" << juce::String(rolloffF, 1)
             << " atkRMS=" << juce::String(attackRMS, 4)
             << " bodyRMS=" << juce::String(bodyRMS, 4)
-            << " keyStr=" << juce::String(keyStrength, 3)
-            << " relKeyStr=" << juce::String(firstToSecondRelativeStrength, 3);
+            << " keyStr=" << juce::String(keyStrength, 3);
         DBG(msg);
+
+        // Also write to the detection log file so it's visible without the IDE.
+        juce::File logDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                .getChildFile("MagicFoldersLogs");
+        logDir.createDirectory();
+        logDir.getChildFile("detection.log").appendText(msg + "\n");
+    }
+
+    /** Append one row to detection_predictions.csv in Documents/MagicFoldersLogs. */
+    void appendDetectionPredictionLog(const juce::File& sourceFile,
+                                      const MagicFoldersProcessor::AnalysisResult& result)
+    {
+        juce::File logDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                                .getChildFile("MagicFoldersLogs");
+        if (!logDir.createDirectory())
+            return;
+        juce::File logFile = logDir.getChildFile("detection_predictions.csv");
+        if (!logFile.existsAsFile())
+            if (!logFile.replaceWithText("file_path,predicted_category,type_loop,top1_prob,timestamp\n"))
+                return;
+        juce::String path = sourceFile.getFullPathName();
+        juce::String cat = result.category;
+        juce::String typeLoop = result.type;
+        juce::String top1 = result.top1Prob >= 0.0f ? juce::String(result.top1Prob, 4) : "";
+        juce::String ts = juce::Time::getCurrentTime().formatted("%Y-%m-%d %H:%M:%S");
+        auto escape = [](const juce::String& s) -> juce::String {
+            if (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r"))
+            {
+                juce::String r;
+                r.preallocateBytes(s.length() + 4);
+                r << "\"";
+                for (juce::juce_wchar c : s)
+                    r << (c == '"' ? "\"\"" : juce::String::charToString(c));
+                r << "\"";
+                return r;
+            }
+            return s;
+        };
+        juce::String line = escape(path) + "," + escape(cat) + "," + escape(typeLoop) + ","
+                         + escape(top1) + "," + escape(ts) + "\n";
+        logFile.appendText(line);
     }
 }
 
@@ -590,6 +586,8 @@ void MagicFoldersProcessor::processAll()
             ++lastRunBlankSkipped;
             continue;
         }
+
+        appendDetectionPredictionLog(info.sourceFile, analysis);
 
         info.category      = analysis.category;
         info.type          = analysis.type;
@@ -720,6 +718,59 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
         return result;
     }
 
+    // ── YAMNet-based detection pipeline (coarse-guarded ML) ──────────────────
+    // This is the primary decision-maker when YAMNet is available (yamnet.onnx
+    // embedded). It runs multiple windows over the file and gates on confidence
+    // + vote consistency, returning Unknown when not sure.
+    bool pipelineMadeDecision = false;
+    DetectionPipeline::DetectionResult dpResult;
+    {
+        // Non-strict: minTopScore=0.20, minMargin=0.05, voteConsistency=0.50.
+        // Loops with varying content (different kick sounds per bar, pluck notes
+        // with silent gaps) fail the strict 60% vote-consistency threshold even
+        // when the correct category is obvious.  DetectionV2 provides a second
+        // guard against false positives, so we can afford to be more lenient here.
+        DetectionPipeline::DetectionConfig cfg;
+        cfg.strictMode = false;
+        cfg.maxWindows = 8;
+        cfg.autoDetectType = true;
+
+        dpResult = DetectionPipeline::detectFile(file, cfg);
+        auto& dp = dpResult;
+
+        auto mapCategoryToString = [](DetectionPipeline::DetectionCategory c) -> juce::String
+        {
+            using DC = DetectionPipeline::DetectionCategory;
+            switch (c)
+            {
+                case DC::Kick:          return "Kicks";
+                case DC::Snare:         return "Snares";
+                case DC::HiHat:         return "Hi-Hats";
+                case DC::Perc:          return "Percussion";
+                case DC::Drums:         return "Percussion";
+                case DC::Bass:          return "Bass";
+                case DC::Guitar:        return "Guitar";
+                case DC::Keys:          return "Melodic";
+                case DC::Pad:           return "Melodic";
+                case DC::Lead:          return "Melodic";
+                case DC::FX:            return "FX";
+                case DC::TextureAtmos:  return "Textures";
+                case DC::Vocal:         return "Vocals";
+                case DC::Unknown:       return juce::String();
+            }
+            return juce::String();
+        };
+
+        if (dp.category != DetectionPipeline::DetectionCategory::Unknown && dp.confidence >= 0.20f)
+        {
+            result.category = mapCategoryToString(dp.category);
+            if (dp.isLoop)
+                result.type = "Loop";
+            result.top1Prob = dp.confidence;
+            pipelineMadeDecision = true;
+        }
+    }
+
     // Essentia's OnsetRate and others expect 44100 Hz; resample if needed
     Real workRate = (Real) sampleRate;
     int workSamples = numSamples;
@@ -832,7 +883,7 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     delete hpcpAlgo;
     delete keyDetector;
 
-    if (keyStrength > 0.35f)
+    if (keyStrength > Heuristic::kKeyStrengthForKeyResult)
         result.key = juce::String(keyStr) + (scaleStr == "minor" ? "m" : "");
 
     // Instrument/category: MFCC + spectral features
@@ -885,7 +936,7 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     for (int i = attackSamples; i < workSamples; i++)
         bodyRMS += (float) (audioBuffer[static_cast<size_t>(i)] * audioBuffer[static_cast<size_t>(i)]);
     bodyRMS = std::sqrt(bodyRMS / (float) std::max(1, bodyCount));
-    bool hasSharpAttack = (attackRMS > bodyRMS * 2.5f);
+    bool hasSharpAttack = (attackRMS > bodyRMS * Heuristic::kSharpAttackRatio);
 
     float mfcc1 = mfccCoeffs.size() > 1 ? (float) mfccCoeffs[1] : 0.0f;
     float mfcc2 = mfccCoeffs.size() > 2 ? (float) mfccCoeffs[2] : 0.0f;
@@ -894,67 +945,271 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     float rolloffF = (float) spectralRolloff;
 
     // Treat anything with a reasonably confident key as tonal.
-    const bool isTonal = (keyStrength > 0.3f && firstToSecondRelativeStrength > 0.1f) || result.key.isNotEmpty();
+    const bool isTonal = (keyStrength > Heuristic::kKeyStrengthTonalMin && firstToSecondRelativeStrength > Heuristic::kFirstToSecondStrengthMin) || result.key.isNotEmpty();
 
-    // Drums and percussion first (most specific)
-    if (hasSharpAttack && centroidF < 800.0f && zcrF < 0.1f)
-        result.category = "Kicks";
-    else if (zcrF > 0.15f && rolloffF > 4000.0f && duration < 1.0)
-        result.category = "Hi-Hats";
-    else if (hasSharpAttack && centroidF > 800.0f && centroidF < 3000.0f)
-        result.category = "Snares";
-    else if (centroidF < 600.0f && !hasSharpAttack && mfcc1 < -10.0f)
-        result.category = "Bass";
-    else if (zcrF > 0.1f && rolloffF > 6000.0f)
-        result.category = "FX";
-    else if (hasSharpAttack && duration < 0.5f)
-        result.category = "Percussion";
-    // Broad guitar-like loop detector before more specific melodic checks.
-    else if (result.type == "Loop" && isGuitarLikeLoop(isTonal, hasSharpAttack, duration, centroidF, zcrF, (int) onsetTimes.size()))
-        result.category = "Guitar";
-    // Guitar: key + mid-range harmonic content; check before Melodic so guitar loops don't become "Keys"
-    else if (isTonal && centroidF >= 400.0f && centroidF <= 4500.0f
-             && (!hasSharpAttack || (result.type == "Loop" && onsetTimes.size() >= 2 && onsetTimes.size() <= 24)))
-        result.category = "Guitar";
-    // Melodic: key + brighter/synth-like (higher centroid or different timbre)
-    else if (!hasSharpAttack && isTonal && mfcc2 > 0.0f)
-        result.category = "Melodic";
-    // Loop with guitar-like timbre but no key detected → still call it Guitar
-    else if (result.type == "Loop" && isTonal && centroidF >= 400.0f && centroidF <= 4500.0f
-             && zcrF < 0.12f && onsetTimes.size() >= 2 && onsetTimes.size() <= 30)
-        result.category = "Guitar";
-    else if (result.type == "Loop")
+    // Always run the heuristic detector to get a broad sense of the sound when
+    // the YAMNet-based path did not already make a confident decision.
+    HeuristicCategory::Features hf;
+    hf.centroidF = centroidF;
+    hf.zcrF = zcrF;
+    hf.rolloffF = rolloffF;
+    hf.mfcc1 = mfcc1;
+    hf.mfcc2 = mfcc2;
+    hf.hasSharpAttack = hasSharpAttack;
+    hf.isTonal = isTonal;
+    hf.duration = duration;
+    hf.onsetCount = (int) onsetTimes.size();
+    hf.bpm = result.bpm;
+    hf.type = result.type;
+    HeuristicCategory::Result hr = HeuristicCategory::run(hf, file);
+    if (result.category.isEmpty())
     {
-        const int onsetCount = (int) onsetTimes.size();
-        // Long, evolving tonal loops with a clear sense of groove or song section → Songstarter
-        if (isTonal && duration >= 4.0 && onsetCount >= 4 && onsetCount <= 32 && result.bpm > 0)
-            result.category = "Songstarter";
-        // Strict Texture: only when non‑tonal and audio looks like a pad/atmosphere or noisy swish
-        else if (!isTonal && isNoisyTextureCandidate(hasSharpAttack, duration, centroidF, zcrF, rolloffF, onsetTimes))
-            result.category = "Textures";
-        // Fallback melodic loop when tonal but we didn't hit more specific Melodic/Guitar/Bass rules
-        else if (isTonal)
+        result.category = hr.category;
+        result.melodicVibe = hr.melodicVibe;
+    }
+
+    // Base coarse type on the pure heuristic result (not pipeline-contaminated result.category),
+    // so the coarse-type guard in DetectionV2 reflects actual acoustic features, not a prior
+    // (possibly wrong) pipeline decision.
+    CoarseType heuristicCoarse = coarseTypeFromCategory(hr.category, isTonal, result.type);
+
+    // Always run DetectionV2 (trained InstrumentClassifier.onnx) when available.
+    // It cross-checks the heuristic coarse type and overrides DetectionPipeline when
+    // it is confident — preventing e.g. guitar/piano from landing in Kick folders.
+    if (useAccurateDetection && detectionV2.isAvailable())
+    {
+        static bool once = true;
+        if (once) { DBG("MagicFolders: v2 path active (model available)"); once = false; }
+
+        // Build a simple hash from full path + modification time so we can
+        // reuse decisions when the same file is processed multiple times.
+        juce::String key = file.getFullPathName() + "|" +
+                           juce::String(file.getLastModificationTime().toMilliseconds());
+        const juce::uint64 hash = (juce::uint64) key.hashCode64();
+
+        Detection::DetectionResult cached{};
+        auto it = detectionCache.find(hash);
+        if (it != detectionCache.end())
+        {
+            cached = it->second;
+        }
+        else
+        {
+            // Use the mono buffer at the original reader rate; resampling for
+            // Essentia has already happened, but DetectionV2 is decoupled and
+            // just needs consistent analysis audio (not on the audio thread).
+            juce::AudioBuffer<float> monoForDetection(1, numSamples);
+            monoForDetection.copyFrom(0, 0, mono, 0, 0, numSamples);
+            cached = detectionV2.classify(monoForDetection,
+                                          (double) sampleRate,
+                                          result.type == "Loop",
+                                          file.getFileNameWithoutExtension());
+            detectionCache[hash] = cached;
+        }
+
+        if (!cached.hasDecision)
+        {
+            DBG(juce::String("MagicFolders: v2 rejected (top1=")
+                + juce::String(cached.top1Prob, 2)
+                + " margin=" + juce::String(cached.top1Prob - cached.top2Prob, 2)
+                + ") primary=" + Detection::classToString(cached.primary));
+        }
+        else
+        {
+            CoarseType mlCoarse = coarseTypeFromClass(cached.primary);
+
+            bool allowMl = false;
+
+            if (heuristicCoarse == CoarseType::Unknown)
+            {
+                // When heuristics have no strong opinion, allow ML to choose.
+                allowMl = true;
+            }
+            else if (mlCoarse != heuristicCoarse)
+            {
+                // Broad type disagreement (e.g. tonal heuristic vs drum ML).
+                // Drum heuristics have strict duration gates that exclude loops,
+                // so a kick/snare/hihat loop often looks like "Textures" or "Other"
+                // to the heuristic even when the ML is clearly right.  FX/Texture
+                // predictions at ~0.29 confidence in a coarse conflict would also
+                // route to Unknown — lower the bar for those too since FX and Textures
+                // are rarely confused with tonal content in a harmful way.
+                const bool mlIsDrum   = (mlCoarse == CoarseType::Drum);
+                const bool mlIsNoiseFx = (mlCoarse == CoarseType::NoiseFx);
+                const float conflictThreshold = (mlIsDrum || mlIsNoiseFx) ? 0.22f : 0.65f;
+
+                if (cached.top1Prob >= conflictThreshold)
+                {
+                    DBG(juce::String("MagicFolders: v2 coarse-type conflict but confident (")
+                        + juce::String(cached.top1Prob, 2)
+                        + ") -> trusting ML over heuristic: "
+                        + Detection::classToString(cached.primary));
+                    allowMl = true;
+                }
+                else
+                {
+                    DBG(juce::String("MagicFolders: v2 coarse-type conflict, low confidence (")
+                        + juce::String(cached.top1Prob, 2)
+                        + ") heuristic=" + result.category
+                        + " ml=" + Detection::classToString(cached.primary)
+                        + " -> Unknown");
+                    result.category = "Unknown";
+                    result.melodicVibe.clear();
+                    result.top1Prob = (float) cached.top1Prob;
+                }
+            }
+            else
+            {
+                // Same coarse type: allow refinement with an extra guard so
+                // clearly tonal/piano-like material isn't flipped into Bass.
+                if (heuristicCoarse == CoarseType::Tonal
+                    && result.category == "Melodic"
+                    && cached.primary == Detection::Class::Bass)
+                {
+                    DBG("MagicFolders: v2 predicted Bass for melodic heuristic; routing to Unknown");
+                    result.category = "Unknown";
+                    result.melodicVibe.clear();
+                    result.top1Prob = (float) cached.top1Prob;
+                }
+                else
+                {
+                    allowMl = true;
+                }
+            }
+
+            if (allowMl)
+            {
+                DBG(juce::String("MagicFolders: v2 accepted (within coarse type) -> ")
+                    + Detection::classToString(cached.primary));
+
+                switch (cached.primary)
+                {
+                    case Detection::Class::Kick:           result.category = "Kicks"; break;
+                    case Detection::Class::Snare:          result.category = "Snares"; break;
+                    case Detection::Class::HiHat:          result.category = "Hi-Hats"; break;
+                    case Detection::Class::Perc:           result.category = "Percussion"; break;
+                    case Detection::Class::Bass:           result.category = "Bass"; break;
+                    case Detection::Class::Guitar:         result.category = "Guitar"; break;
+                    case Detection::Class::Keys:           result.category = "Melodic"; result.melodicVibe = "Keys"; break;
+                    case Detection::Class::Pad:            result.category = "Melodic"; result.melodicVibe = "Pad"; break;
+                    case Detection::Class::Lead:           result.category = "Melodic"; result.melodicVibe = "Lead"; break;
+                    case Detection::Class::Vocal:          result.category = "Vocals"; break;
+                    case Detection::Class::FX:             result.category = "FX"; break;
+                    case Detection::Class::TextureAtmos:   result.category = "Textures"; break;
+                    case Detection::Class::Other:
+                    default:                               result.category = "Other"; break;
+                }
+
+                result.top1Prob = (float) cached.top1Prob;
+            }
+        }
+    }
+
+    // Final safety net: avoid clearly tonal material ending up as Bass unless
+    // Tonal-signal guard: if Essentia detected a musical key AND the model is
+    // not highly confident, the sample is likely melodic — don't place it in a
+    // drum folder.  We skip this guard when top1Prob >= 0.85 so a very
+    // confident model prediction (e.g. a tonal/filtered kick at 90%+) is not
+    // wrongly blocked by the key detector.
+    // Exception: filename explicitly names a drum type.
+    // Tonal-signal guard: only override a drum classification when (a) the ML is
+    // not very confident AND (b) Essentia detected a STRONG tonal key.  Many
+    // synthesised kicks / hi-hats have a faint tonal fundamental that barely
+    // passes the minimum key-strength threshold — we no longer want those to
+    // route to Unknown.  Require top1Prob < 0.90 (was 0.80) so confident drum
+    // predictions survive, and require a stronger key signal (> 0.50) before
+    // overriding.
+    static const juce::StringArray kPercussiveCategories { "Kicks", "Snares", "Hi-Hats", "Percussion" };
+    if (isTonal && keyStrength > 0.50f && kPercussiveCategories.contains(result.category) && result.top1Prob < 0.95f)
+    {
+        const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
+        const bool nameSuggestsDrum = lowerName.contains("kick") || lowerName.contains("kik")
+                                   || lowerName.contains("bd") || lowerName.contains("snare")
+                                   || lowerName.contains("snr") || lowerName.contains("hihat")
+                                   || lowerName.contains("hi-hat") || lowerName.contains(" hat")
+                                   || lowerName.contains("hh") || lowerName.contains("cymbal")
+                                   || lowerName.contains("clap") || lowerName.contains("perc")
+                                   || lowerName.contains("drum") || lowerName.contains("hat loop")
+                                   || lowerName.contains("rim") || lowerName.contains("tom");
+        if (!nameSuggestsDrum)
+        {
+            DBG("MagicFolders: strong tonal signal overrides drum category " + result.category + " (top1=" + juce::String(result.top1Prob, 2) + ", keyStrength=" + juce::String(keyStrength, 2) + ") -> Unknown for " + file.getFileName());
+            result.category = "Unknown";
+            result.melodicVibe.clear();
+        }
+    }
+
+    // the filename strongly suggests a bass instrument. This runs after both
+    // heuristics and ML have had a chance to decide.
+    if (isTonal && result.category == "Bass")
+    {
+        const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
+        const bool nameSuggestsBass = lowerName.contains("bass")
+                                   || lowerName.contains("808")
+                                   || lowerName.contains("sub")
+                                   || lowerName.contains("subbass")
+                                   || lowerName.contains("lowend")
+                                   || lowerName.contains("bs_")
+                                   || lowerName.contains("bss");
+        const bool nameSuggestsMelodic = lowerName.contains("piano")
+                                      || lowerName.contains("keys")
+                                      || lowerName.contains("rhodes")
+                                      || lowerName.contains("melod")
+                                      || lowerName.contains("lead")
+                                      || lowerName.contains("synth")
+                                      || lowerName.contains("arp")
+                                      || lowerName.contains("pad")
+                                      || lowerName.contains("hook");
+
+        if (!nameSuggestsBass)
+        {
+            // Tonal + no bass name cue → assume melodic rather than Unknown.
+            // "synth", "lead", "pad", "keys" etc. in the name → Melodic.
+            // Anything else that's tonal and was mis-tagged Bass → also Melodic
+            // (better than Unknown since the ML at least knew it was tonal).
             result.category = "Melodic";
-        else
-            result.category = "Other";
+            if (result.melodicVibe.isEmpty())
+                result.melodicVibe = nameSuggestsMelodic ? "Keys" : "Keys";
+        }
     }
-    else
-        result.category = "Other";
 
-    if (result.category == "Melodic")
+    // Last-resort soft fallback: if we still have no category (or Other), use the
+    // pipeline's top1 debug label as a weak hint.  This handles cases where the
+    // pipeline was gated (vote inconsistency / low margin) but still had a clear
+    // best-guess — e.g. a kick loop with varying hits where only 45% of windows
+    // agreed, or a pluck loop with silent gaps.  Only apply when top1Score ≥ 0.18.
+    if ((result.category.isEmpty() || result.category == "Other") && dpResult.debug.top1Score >= 0.18f)
     {
-        if (!hasSharpAttack && duration > 1.5f && onsetTimes.size() <= 6)
-            result.melodicVibe = "Pad";
-        else if (hasSharpAttack && (duration < 2.5f || onsetTimes.size() > 5))
-            result.melodicVibe = "Pluck";
-        else if (centroidF > 2400.0f)
-            result.melodicVibe = "Lead";
-        else
-            result.melodicVibe = "Keys";
+        const auto& label = dpResult.debug.top1Label;
+        if      (label == "Kick")         result.category = "Kicks";
+        else if (label == "Snare")        result.category = "Snares";
+        else if (label == "HiHat")        result.category = "Hi-Hats";
+        else if (label == "Perc" ||
+                 label == "Drums")        result.category = "Percussion";
+        else if (label == "Bass")         result.category = "Bass";
+        else if (label == "Guitar")       result.category = "Guitar";
+        else if (label == "Keys" ||
+                 label == "Pad"  ||
+                 label == "Lead")         { result.category = "Melodic"; if (result.melodicVibe.isEmpty()) result.melodicVibe = label; }
+        else if (label == "FX")           result.category = "FX";
+        else if (label == "TextureAtmos") result.category = "Textures";
+        else if (label == "Vocal")        result.category = "Vocals";
+
+        if (result.category != "Other" && result.category.isNotEmpty())
+            result.top1Prob = dpResult.debug.top1Score;
     }
 
-    // Apply filename-based hints last so they can gently correct ambiguous loop cases (e.g. \"Guitar\" vs \"Textures\").
-    applyFilenameHints(file, result);
+    logAnalysisDebug(file,
+                     result,
+                     duration,
+                     (int) onsetTimes.size(),
+                     centroidF,
+                     zcrF,
+                     rolloffF,
+                     attackRMS,
+                     bodyRMS,
+                     (float) keyStrength,
+                     (float) firstToSecondRelativeStrength);
 
     // Smart naming
     std::map<juce::String, juce::String> shortNames = {

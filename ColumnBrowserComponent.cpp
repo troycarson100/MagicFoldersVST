@@ -504,14 +504,6 @@ void ColumnBrowserComponent::layoutColumns()
     int n = (int)columnWidths.size();
     if (n == 0 || getWidth() <= 0)
         return;
-    int total = 0;
-    for (int i = 0; i < n; ++i)
-        total += columnWidths[i];
-    total += (n - 1) * kDividerWidth;
-    int diff = getWidth() - total;
-    // Only expand the last column to fill (never shrink it), so divider drags aren't undone
-    if (diff > 0 && n > 0)
-        columnWidths.set(n - 1, juce::jmax(kMinColumnWidth, columnWidths[n - 1] + diff));
 }
 
 void ColumnBrowserComponent::paintColumn(juce::Graphics& g, int columnIndex, juce::Rectangle<int> bounds)

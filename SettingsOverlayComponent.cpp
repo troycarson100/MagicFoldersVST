@@ -182,6 +182,9 @@ SettingsOverlayComponent::SettingsOverlayComponent(MagicFoldersProcessor& proc)
     behaviorSectionLabel.setColour(juce::Label::textColourId, textCharcoal);
     behaviorSectionLabel.setFont(FinderTheme::interFont(14.0f, true));
     addAndMakeVisible(behaviorSectionLabel);
+    useMlDetectionToggle.setButtonText("Use ML detection (experimental)");
+    useMlDetectionToggle.onClick = [this] { processor.useAccurateDetection = useMlDetectionToggle.getToggleState(); };
+    addAndMakeVisible(useMlDetectionToggle);
     overwriteDuplicatesToggle.setButtonText("Overwrite Duplicates");
     overwriteDuplicatesToggle.onClick = [this] { processor.overwriteDuplicates = overwriteDuplicatesToggle.getToggleState(); };
     addAndMakeVisible(overwriteDuplicatesToggle);
@@ -206,6 +209,7 @@ SettingsOverlayComponent::SettingsOverlayComponent(MagicFoldersProcessor& proc)
     content.addAndMakeVisible(customPrefixLabel);
     content.addAndMakeVisible(customPrefixEditor);
     content.addAndMakeVisible(behaviorSectionLabel);
+    content.addAndMakeVisible(useMlDetectionToggle);
     content.addAndMakeVisible(overwriteDuplicatesToggle);
 
     syncFromProcessor();
@@ -223,6 +227,7 @@ void SettingsOverlayComponent::syncFromProcessor()
     namingFormatDropdown.setSelectedIndex(juce::jlimit(0, 2, processor.namingFormat), juce::dontSendNotification);
     generateFunNamesToggle.setToggleState(processor.generateFunNames, juce::dontSendNotification);
     customPrefixEditor.setText(processor.customPrefix, juce::dontSendNotification);
+    useMlDetectionToggle.setToggleState(processor.useAccurateDetection, juce::dontSendNotification);
     overwriteDuplicatesToggle.setToggleState(processor.overwriteDuplicates, juce::dontSendNotification);
     if (processor.outputDirectory.isDirectory()) {
         juce::String p = processor.outputDirectory.getFullPathName();
@@ -354,6 +359,8 @@ void SettingsOverlayComponent::resized()
     sectionTop = y;
     behaviorSectionLabel.setBounds(kContentPad + 12, y, cw - kContentPad * 2, 22);
     y += 26;
+    useMlDetectionToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
+    y += 38;
     overwriteDuplicatesToggle.setBounds(kContentPad + 12, y, cw - kContentPad * 2 - 24, 32);
     y += 44;
     sectionRects.add(juce::Rectangle<int>(kContentPad, sectionTop - 8, cw - kContentPad * 2, y - sectionTop + 4));

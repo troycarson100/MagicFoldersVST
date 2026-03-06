@@ -38,7 +38,25 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release
 ```
 
-Outputs: `SampleOrganizer_artefacts/Release/` (VST3, AU, Standalone app).
+Outputs: `MagicFolders_artefacts/Release/` (VST3, AU, Standalone app).
+
+### 4. Optional: ML instrument classifier (Accuracy Mode)
+
+To use the ML-backed detector instead of heuristics only:
+
+1. **Train a model (free)**  
+   See **`training/README_TRAINING.md`**. Use the Python script in `training/` (locally or in Google Colab) with your own labeled WAVs in `data/Kick/`, `data/Snare/`, etc. Export produces `InstrumentClassifier.onnx`.
+
+2. **Embed the model**  
+   Copy `InstrumentClassifier.onnx` into `assets/`. Re-run CMake and build; the plugin will embed the model when the file is present.
+
+3. **Link ONNX Runtime**  
+   Download a prebuilt [ONNX Runtime](https://github.com/microsoft/onnxruntime/releases) for your OS (e.g. `onnxruntime-osx-arm64-1.16.0`). Configure and build with:
+   ```bash
+   cmake .. -DONNXRUNTIME_ROOT=/path/to/onnxruntime-osx-arm64-1.16.0
+   cmake --build .
+   ```
+   Then enable **Accuracy Mode (ML)** in the plugin settings.
 
 ## Usage
 

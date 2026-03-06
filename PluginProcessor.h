@@ -2,6 +2,8 @@
 #include <JuceHeader.h>
 #include <juce_dsp/juce_dsp.h>
 #include <map>
+#include <unordered_map>
+#include "Source/Detection/DetectionV2.h"
 
 class MagicFoldersProcessor : public juce::AudioProcessor
 {
@@ -14,6 +16,8 @@ public:
         juce::String key;
         int bpm = 0;
         juce::String melodicVibe;  // Pad, Pluck, Lead, Keys (only set when category == Melodic)
+        /** When ML (v2) accepted: top-1 probability; otherwise -1.0f. Used for prediction log. */
+        float top1Prob = -1.0f;
         /** True if audio is silent/near-silent (e.g. blank Ableton slot); skip copying. */
         bool isBlank = false;
     };
@@ -73,6 +77,8 @@ public:
     bool generateFunNames = false;
     bool overwriteDuplicates = false;
     bool themeLight = true;
+    /** When true and a model is available, use the v2 ML-backed detector. Default on. */
+    bool useAccurateDetection = true;
 
     /** When set by the editor, processAll() writes here instead of outputDirectory. */
     juce::File currentProcessDirectory;
@@ -123,5 +129,10 @@ private:
     juce::AudioTransportSource previewTransport;
     std::unique_ptr<juce::AudioFormatReaderSource> previewReaderSource;
     double previewLengthSeconds = 0.0;
+
+    // v2 detection cache (keyed by a simple hash of file path + mod time)
+    std::unordered_map<juce::uint64, Detection::DetectionResult> detectionCache;
+    Detection::DetectionV2 detectionV2;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MagicFoldersProcessor)
 };

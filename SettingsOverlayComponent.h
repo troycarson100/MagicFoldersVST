@@ -42,6 +42,7 @@ private:
     juce::TextEditor customPrefixEditor;
 
     juce::Label behaviorSectionLabel;
+    SettingsToggleComponent useMlDetectionToggle;
     SettingsToggleComponent overwriteDuplicatesToggle;
 
     juce::Viewport scrollViewport;
