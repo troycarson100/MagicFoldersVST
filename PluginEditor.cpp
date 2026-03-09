@@ -313,6 +313,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     dragLabel.setFont(interFont(15.0f, true));
     dragLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(dragLabel);
+    dragLabel.setInterceptsMouseClicks(false, false);
     batchPlusDrawable = AssetLoader::getBatchPlusIcon();
     batchPlusBtn.setImages(batchPlusDrawable.get());
     batchPlusBtn.setColour(juce::DrawableButton::backgroundColourId, juce::Colours::transparentBlack);
@@ -421,6 +422,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     queueLabel.setColour(juce::Label::textColourId, textCharcoal);
     queueLabel.setFont(interFont(13.0f));
     addAndMakeVisible(queueLabel);
+    queueLabel.setInterceptsMouseClicks(false, false);
 
     processBtn.setButtonText("Process Samples");
     processBtn.setColour(juce::TextButton::buttonColourId, processBtnBg);
@@ -507,6 +509,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
         settingsOverlay->setVisible(false);
         refreshPackList();
         batchPlusBtn.setEnabled(processor.batchPlusFolder.isDirectory());
+        batchPlusBtn.toFront(true);
     };
     addChildComponent(settingsOverlay.get());
 
@@ -870,7 +873,6 @@ void MagicFoldersEditor::resized()
     batchPlusBtn.setBounds(dragBounds.getRight() - kBatchPlusW - kBatchPlusInsetH,
                            dragBounds.getY() + kBatchPlusTopInset,
                            kBatchPlusW, kBatchPlusH);
-    batchPlusBtn.toFront(true);
     juce::Rectangle<int> dragInner = dragBounds.reduced(16, 10);
     juce::Rectangle<int> queueViewportBounds = dragInner.withTrimmedRight(kBatchPlusRightMargin);
     dragLabel.setBounds(dragInner);
@@ -892,6 +894,7 @@ void MagicFoldersEditor::resized()
         queueViewport.setVisible(false);
         queueLabel.setVisible(false);
     }
+    batchPlusBtn.toFront(true);  // always last so button is above queue/label regardless of visibility branch
     processBtn.setBounds(getProcessButtonBounds());
 
     settingsOverlay->setBounds(0, 0, w, h);
@@ -1635,6 +1638,7 @@ void MagicFoldersEditor::filesDropped(const juce::StringArray& files, int, int)
     queueViewport.setVisible(true);
     dragLabel.setVisible(false);
     queueLabel.setVisible(false);
+    batchPlusBtn.toFront(true);
     queueListContent.repaint();
     repaint();
 }

@@ -2,13 +2,24 @@
 
 namespace Heuristic
 {
-    // Kick: low centroid, low ZCR, sharp attack
-    constexpr float kKickCentroidMax   = 800.0f;
-    constexpr float kKickZcrMax        = 0.1f;
+    // Kick: three-level rule (rolloff → centroid low → centroid mid).
+    // kKickRolloffMax — Level 0: if 85% of energy is below this frequency,
+    //   the sound is sub-bass regardless of ZCR (catches layered/noisy house kicks).
+    //   Guitar/snare/hihat cannot have rolloff this low.
+    // kKickCentroidLow  — Level 1: unambiguously a kick even when tonal
+    //   (e.g. 808 with pitch sweep): centroid < 600 Hz + sharp attack.
+    //   Restricted to One-Shots; CNN14 handles kick loop detection.
+    // kKickCentroidMax  — Level 2: moderate centroid, requires !isTonal so
+    //   bass guitar plucks don't match.
+    // kKickZcrMax = 0.20 creates a clean non-overlapping boundary with hi-hats.
+    constexpr float kKickRolloffMax    = 250.0f;
+    constexpr float kKickCentroidLow   = 600.0f;
+    constexpr float kKickCentroidMax   = 1400.0f;
+    constexpr float kKickZcrMax        = 0.20f;
 
-    // Snare: mid centroid range
-    constexpr float kSnareCentroidMin  = 800.0f;
-    constexpr float kSnareCentroidMax  = 3000.0f;
+    // Snare: mid centroid range, starts above kick max to avoid overlap.
+    constexpr float kSnareCentroidMin  = 1400.0f;
+    constexpr float kSnareCentroidMax  = 4000.0f;
 
     // Hi-hat: high ZCR, bright, very short, and very high spectral centroid.
     // Real hi-hats sit at 4000–12000 Hz centroid; snares typically at 800–3000 Hz.
@@ -27,11 +38,16 @@ namespace Heuristic
     constexpr float kFxRolloffMin      = 6000.0f;
     constexpr float kFxBrightnessMin   = 2.5f;  // rolloff/centroid ratio
 
-    // Percussion: short, sharp attack
-    constexpr float kPercDurationMax   = 0.5f;
+    // Percussion: short, sharp attack.
+    // Raised from 0.5 → 1.5 s: longer one-shots (e.g. layered snares with
+    // long reverb tail, 808s with pitch decay) should still be Percussion
+    // rather than falling to Other.
+    constexpr float kPercDurationMax   = 1.5f;
 
-    // Attack vs body RMS ratio for "sharp attack"
-    constexpr float kSharpAttackRatio  = 2.5f;
+    // Attack vs body RMS ratio for "sharp attack".
+    // Lowered from 2.5 → 1.8: some kicks and snares have a moderately punchy
+    // attack (ratio ~2.0) that still classifies clearly as percussive.
+    constexpr float kSharpAttackRatio  = 1.8f;
 
     // Guitar-like loop: duration and onset count range
     constexpr double kGuitarDurationMin = 0.75;

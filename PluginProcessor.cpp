@@ -743,12 +743,20 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
             using DC = DetectionPipeline::DetectionCategory;
             switch (c)
             {
-                case DC::Kick:          return "Kicks";
-                case DC::Snare:         return "Snares";
-                case DC::HiHat:         return "Hi-Hats";
-                case DC::Perc:          return "Percussion";
-                case DC::Drums:         return "Percussion";
-                case DC::Bass:          return "Bass";
+                // Drum categories intentionally return empty — drum classification
+                // is handled exclusively by acoustic heuristics (centroid/ZCR/attack).
+                // The InstrumentClassifier model is unreliable for isolated drum hits
+                // and was the source of consistent kick→HiHat mislabels.
+                // Bass also returns empty: InstrumentClassifier labels deep 808 kicks
+                // as "Bass" (low centroid), which then triggers the tonal Bass→Melodic
+                // guard. The acoustic heuristic correctly distinguishes Bass (!attack)
+                // from Kicks (sharp attack), so we let the heuristic handle Bass too.
+                case DC::Kick:
+                case DC::Snare:
+                case DC::HiHat:
+                case DC::Perc:
+                case DC::Drums:
+                case DC::Bass:          return juce::String();
                 case DC::Guitar:        return "Guitar";
                 case DC::Keys:          return "Melodic";
                 case DC::Pad:           return "Melodic";
@@ -761,7 +769,15 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
             return juce::String();
         };
 
-        if (dp.category != DetectionPipeline::DetectionCategory::Unknown && dp.confidence >= 0.20f)
+        // DetectionPipeline (InstrumentClassifier.onnx) is disabled for category
+        // assignment. It ran first and set result.category before the heuristic,
+        // causing the heuristic's correct calls (e.g. 808 kick → Kicks) to be
+        // silently ignored by the isEmpty guard. CNN14 + acoustic heuristics
+        // cover every category with far greater accuracy.
+        // result.type is determined at line ~825 from duration+onsets anyway.
+        // The dpResult struct is still populated above for its debug.top1Label
+        // used in the last-resort fallback further down.
+        if (false && dp.category != DetectionPipeline::DetectionCategory::Unknown && dp.confidence >= 0.35f)
         {
             result.category = mapCategoryToString(dp.category);
             if (dp.isLoop)
@@ -973,6 +989,11 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     // (possibly wrong) pipeline decision.
     CoarseType heuristicCoarse = coarseTypeFromCategory(hr.category, isTonal, result.type);
 
+    // Tracks whether CNN14 predicted a drum type for the current file.
+    // Used by the tonal-override guard below to avoid redirecting tonal kicks
+    // (where CNN14 says "Kick" at low confidence) to Melodic.
+    bool mlSaidDrum = false;
+
     // Run DetectionV2 (YAMNet + trained MLP head) when available.
     // It cross-checks the heuristic coarse type and overrides DetectionPipeline when
     // confident — preventing e.g. guitar/piano from landing in Kick folders.
@@ -1007,6 +1028,9 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
             detectionCache[hash] = cached;
         }
 
+        // Record whether CNN14 predicted a drum type (used in tonal-override below).
+        mlSaidDrum = (coarseTypeFromClass(cached.primary) == CoarseType::Drum);
+
         if (!cached.hasDecision)
         {
             DBG(juce::String("MagicFolders: v2 rejected (top1=")
@@ -1022,40 +1046,110 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
 
             if (heuristicCoarse == CoarseType::Unknown)
             {
-                // Heuristic has no strong opinion — let ML decide.
-                allowMl = true;
-            }
-            else if (mlCoarse != heuristicCoarse)
-            {
-                // Coarse-type disagreement. Trust the ML at a single uniform
-                // threshold of 0.40: above that it is reliably correct, and
-                // the richer CNN14 embeddings make it far more dependable than
-                // the old two-tier (0.22 drums / 0.40 tonal) system that caused
-                // too many drums to be routed to Unknown.
-                if (cached.top1Prob >= 0.40f)
+                // Heuristic has no strong opinion.
+                // For drums: trust CNN14 only at high confidence (>= 0.70).
+                // HiHat requires extra bar (0.85) since it was the original
+                // source of kick→hi-hat false positives at low confidence.
+                if (mlCoarse == CoarseType::Drum)
                 {
-                    DBG(juce::String("MagicFolders: v2 coarse-type conflict but confident (")
-                        + juce::String(cached.top1Prob, 2)
-                        + ") -> trusting ML: "
-                        + Detection::classToString(cached.primary));
-                    allowMl = true;
+                    float drumThresh = (cached.primary == Detection::Class::HiHat) ? 0.85f : 0.70f;
+                    allowMl = (cached.top1Prob >= drumThresh);
                 }
                 else
                 {
-                    DBG(juce::String("MagicFolders: v2 coarse-type conflict, low confidence (")
-                        + juce::String(cached.top1Prob, 2)
-                        + ") heuristic=" + result.category
-                        + " ml=" + Detection::classToString(cached.primary)
-                        + " -> keeping heuristic");
-                    // Keep the heuristic result (not Unknown) for low-confidence conflicts.
-                    allowMl = false;
+                    allowMl = true;
+                }
+            }
+            else if (mlCoarse == heuristicCoarse)
+            {
+                if (heuristicCoarse == CoarseType::Drum)
+                {
+                    // Let CNN14 refine the drum sub-type at high confidence.
+                    // HiHat still requires extra confidence due to historical
+                    // false-positives (kicks mislabeled as hi-hats at ~30%).
+                    float drumThresh = (cached.primary == Detection::Class::HiHat) ? 0.85f : 0.70f;
+                    // When the heuristic already conceded it can't determine a specific
+                    // drum type (gave generic "Percussion"), lower the bar so CNN14 can
+                    // refine snare/kick at 45%+ rather than requiring 70%.
+                    if (hr.category == "Percussion" && cached.primary != Detection::Class::HiHat)
+                        drumThresh = (cached.primary == Detection::Class::Kick) ? 0.30f : 0.45f;
+                    allowMl = (cached.top1Prob >= drumThresh);
+                }
+                else
+                {
+                    // Same coarse type (non-drum) — let ML refine within that type.
+                    allowMl = true;
                 }
             }
             else
             {
-                // Same coarse type — always let ML refine within that type.
-                allowMl = true;
+                // Coarse-type disagreement. Strategy depends on direction:
+                //
+                // Drums → heuristics always win. CNN14 validation shows Kick F1=0.33
+                // and Snare F1=0.47 — the model is unreliable for isolated drum
+                // samples because CNN14 was trained on full music mixes in AudioSet.
+                // Acoustic heuristics (attack shape, centroid, ZCR) are far more
+                // reliable for isolated one-shots and loops.
+                //
+                // Tonal/FX → ML can override at high confidence (≥ 0.65) since
+                // CNN14 achieves Guitar F1=0.78, Keys=0.75, Vocal=0.73.
+                if (heuristicCoarse == CoarseType::Drum)
+                {
+                    // Heuristic says Drum but ML says Tonal/FX.
+                    // Deep kicks (centroid < 600Hz): always trust heuristic — 808s are
+                    // unambiguously kicks even when tonal.
+                    // Mid-range (centroid >= 600Hz): Level-2 kick rule can false-trigger
+                    // on non-tonal guitar plucks; allow a confident CNN14 tonal call to win.
+                    // Guitar specifically: CNN14 achieves F1=0.78 for Guitar in our
+                    // training set, so trust it at 55%+ even below the 600Hz centroid
+                    // gate (a low guitar note could have centroid < 600Hz).
+                    const bool mlSaysGuitar = (cached.primary == Detection::Class::Guitar);
+                    if (mlCoarse == CoarseType::Tonal
+                        && ((cached.top1Prob >= 0.65f && centroidF >= Heuristic::kKickCentroidLow)
+                            || (mlSaysGuitar && cached.top1Prob >= 0.55f)))
+                    {
+                        DBG(juce::String("MagicFolders: CNN14 tonal override of drum heuristic (")
+                            + Detection::classToString(cached.primary)
+                            + " @ " + juce::String(cached.top1Prob, 2) + ")");
+                        allowMl = true;
+                    }
+                    else
+                    {
+                        DBG(juce::String("MagicFolders: drum heuristic wins over ML (")
+                            + Detection::classToString(cached.primary)
+                            + " @ " + juce::String(cached.top1Prob, 2) + ")");
+                        allowMl = false;
+                    }
+                }
+                else if (cached.top1Prob >= 0.65f
+                         || (mlCoarse == CoarseType::NoiseFx && cached.top1Prob >= 0.45f))
+                {
+                    // ML is highly confident and heuristic says non-drum.
+                    // Trust ML to upgrade/downgrade within tonal/FX buckets.
+                    // Lower bar (0.45) when ML predicts NoiseFx (Texture/Atmos/FX):
+                    // heuristics often mistake slow-attack ambient loops for Guitar.
+                    DBG(juce::String("MagicFolders: high-confidence ML overrides heuristic (")
+                        + juce::String(cached.top1Prob, 2)
+                        + ") -> " + Detection::classToString(cached.primary));
+                    allowMl = true;
+                }
+                else
+                {
+                    // Low confidence — keep heuristic.
+                    DBG(juce::String("MagicFolders: low-conf ML conflict, keeping heuristic (")
+                        + juce::String(cached.top1Prob, 2)
+                        + ") heuristic=" + result.category
+                        + " ml=" + Detection::classToString(cached.primary));
+                    allowMl = false;
+                }
             }
+
+            // Always record the ML confidence so the tonal-override guard below
+            // (`result.top1Prob < 0.45f`) sees the real ML certainty even when
+            // allowMl=false (e.g. 808 kick: heuristic=Kicks, CNN14=Pad@95% →
+            // top1Prob=0.0 was previously causing the tonal override to fire and
+            // change the kick to Melodic).
+            result.top1Prob = (float) cached.top1Prob;
 
             if (allowMl)
             {
@@ -1079,8 +1173,6 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
                     case Detection::Class::Other:
                     default:                               result.category = "Other"; break;
                 }
-
-                result.top1Prob = (float) cached.top1Prob;
             }
         }
     }
@@ -1111,7 +1203,8 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
         && isTonal
         && keyStrength > 0.70f
         && kPercussiveCategories.contains(result.category)
-        && result.top1Prob < 0.45f)
+        && result.top1Prob < 0.45f
+        && !mlSaidDrum)  // CNN14 leans toward drum → don't redirect to Melodic
     {
         const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
         const bool nameSuggestsDrum = lowerName.contains("kick") || lowerName.contains("kik")
@@ -1169,19 +1262,17 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     }
 
     // Last-resort soft fallback: if we still have no category (or Other), use the
-    // pipeline's top1 debug label as a weak hint.  This handles cases where the
-    // pipeline was gated (vote inconsistency / low margin) but still had a clear
-    // best-guess — e.g. a kick loop with varying hits where only 45% of windows
-    // agreed, or a pluck loop with silent gaps.  Only apply when top1Score ≥ 0.18.
-    if ((result.category.isEmpty() || result.category == "Other") && dpResult.debug.top1Score >= 0.18f)
+    // pipeline's top1 debug label as a weak hint.
+    // Drums are EXCLUDED: the DetectionPipeline runs on YAMNet which is unreliable
+    // for isolated drum samples, and a 18% confidence drum guess causes consistent
+    // false classifications (e.g. kicks landing in Hi-Hats).
+    // If acoustic heuristics didn't identify it as a drum, no low-confidence ML
+    // guess should either. Only tonal/FX categories are useful here.
+    if ((result.category.isEmpty() || result.category == "Other") && dpResult.debug.top1Score >= 0.40f)
     {
         const auto& label = dpResult.debug.top1Label;
-        if      (label == "Kick")         result.category = "Kicks";
-        else if (label == "Snare")        result.category = "Snares";
-        else if (label == "HiHat")        result.category = "Hi-Hats";
-        else if (label == "Perc" ||
-                 label == "Drums")        result.category = "Percussion";
-        else if (label == "Bass")         result.category = "Bass";
+        // Drums intentionally omitted — heuristics handle all drum classification.
+        if      (label == "Bass")         result.category = "Bass";
         else if (label == "Guitar")       result.category = "Guitar";
         else if (label == "Keys" ||
                  label == "Pad"  ||

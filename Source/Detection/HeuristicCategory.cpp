@@ -134,7 +134,24 @@ namespace HeuristicCategory
         result.type = f.type;
         result.category = "Other";
 
-        if (f.hasSharpAttack && f.centroidF < Heuristic::kKickCentroidMax && f.zcrF < Heuristic::kKickZcrMax)
+        // Kick: three-level rule to handle sub, clean, and punchy/808-style kicks.
+        // Level 0 — sub-bass rolloff (< 250 Hz, one-shots only): when 85% of spectral
+        //   energy is below 250 Hz AND the sound has a sharp attack, it is virtually
+        //   always a kick drum. This catches layered or noisy house/trap kicks whose
+        //   ZCR is elevated (failing Level 1/2) but whose low-end rolloff is unmistakable.
+        //   Guitar/snare/hihat/FX cannot have rolloff this low; rolloff > 0 guard skips
+        //   samples where the rolloff algorithm returns no valid result (e.g. silent tail).
+        // Level 1 — very low centroid (< 600 Hz): unambiguously a kick even when
+        //   a pitch-sweep gives it a detectable musical key (e.g. 808 sub).
+        //   Restricted to One-Shots only: melodic loops (keys, pads) can also have
+        //   centroid < 600 Hz with a sharp onset — CNN14 handles kick loop detection.
+        // Level 2 — moderate centroid (600–1400 Hz): require !isTonal so that
+        //   guitar/bass plucks (tonal + low centroid) don't match.
+        if (f.hasSharpAttack && f.type != "Loop" && f.rolloffF > 0.0f && f.rolloffF < Heuristic::kKickRolloffMax)
+            result.category = "Kicks";
+        else if (f.hasSharpAttack && f.type != "Loop" && f.centroidF < Heuristic::kKickCentroidLow && f.zcrF < Heuristic::kKickZcrMax)
+            result.category = "Kicks";
+        else if (f.hasSharpAttack && !f.isTonal && f.centroidF < Heuristic::kKickCentroidMax && f.zcrF < Heuristic::kKickZcrMax)
             result.category = "Kicks";
         else if (f.zcrF > Heuristic::kHiHatZcrMin && f.rolloffF > Heuristic::kHiHatRolloffMin
                  && f.centroidF > Heuristic::kHiHatCentroidMin && f.duration < Heuristic::kHiHatDurationMax)
