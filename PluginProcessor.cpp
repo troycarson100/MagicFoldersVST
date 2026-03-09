@@ -143,7 +143,9 @@ MagicFoldersProcessor::MagicFoldersProcessor()
     : previewTransport()
 {
     setPlayConfigDetails(0, 2, 44100.0, 512);
-    previewReadAheadThread.startThread();
+    // Run the read-ahead thread at high priority so the buffer stays full even at
+    // small host buffer sizes. Normal priority caused read starvation in Ableton.
+    previewReadAheadThread.startThread(juce::Thread::Priority::high);
     essentia::init();
 }
 
@@ -168,25 +170,47 @@ void MagicFoldersProcessor::releaseResources()
 
 void MagicFoldersProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    buffer.clear();
-    if (previewReaderSource == nullptr)
-        return;
-    juce::AudioSourceChannelInfo info(buffer);
-    previewTransport.getNextAudioBlock(info);
+    // Only replace the buffer when we are actively previewing a sample.
+    // Otherwise pass the host track audio through unchanged so the plugin
+    // does not silence the channel when it is inserted on a track.
+    // Note: isPlaying() is a thread-safe atomic check; no need to also check
+    // previewReaderSource (which is owned by the message thread).
+    if (previewTransport.isPlaying())
+    {
+        buffer.clear();
+        juce::AudioSourceChannelInfo info(buffer);
+        previewTransport.getNextAudioBlock(info);
+    }
 }
 
 void MagicFoldersProcessor::setPreviewSource(std::unique_ptr<juce::AudioFormatReaderSource> source, double fileSampleRate, double lengthInSeconds)
 {
-    previewTransport.setSource(nullptr);
+    // Keep the old reader alive until AFTER the transport has switched to the
+    // new source. AudioTransportSource::setSource() atomically swaps sources
+    // under its internal lock in a single acquisition — replacing old with new
+    // in one step. Resetting oldSource afterwards is safe because the transport
+    // has already released its raw pointer to it.
+    auto oldSource = std::move(previewReaderSource);
     previewReaderSource = std::move(source);
     previewLengthSeconds = lengthInSeconds;
+
     if (previewReaderSource)
     {
-        const int readAheadSize = 32768;
+        // 131072 samples ≈ ~3 s at 44.1 kHz. Generous buffer so the read-ahead
+        // thread keeps the audio callback fed even at small host buffer sizes.
+        // 131072 samples ≈ ~3 s at 44.1 kHz. Generous buffer so the read-ahead
+        // thread keeps the audio callback fed even at small host buffer sizes.
+        const int readAheadSize = 131072;
+        // AudioTransportSource::setSource() already calls prepareToPlay()
+        // internally when the transport has been prepared, so an explicit
+        // prepareToPlay() here is redundant and wastes an audio-lock acquisition.
         previewTransport.setSource(previewReaderSource.get(), readAheadSize, &previewReadAheadThread, fileSampleRate);
-        if (previewBlockSize > 0 && previewSampleRate > 0)
-            previewTransport.prepareToPlay(previewBlockSize, previewSampleRate);
     }
+    else
+    {
+        previewTransport.setSource(nullptr);
+    }
+    // oldSource destroyed here — safe because transport already switched away
 }
 
 void MagicFoldersProcessor::startPreview()
@@ -200,7 +224,9 @@ void MagicFoldersProcessor::startPreview()
 
 void MagicFoldersProcessor::stopPreview()
 {
-    previewTransport.stop();
+    // setSource(nullptr) internally sets playing = false (under the callback
+    // lock), so the explicit stop() call beforehand is redundant — removing it
+    // saves one extra lock acquisition on the message thread.
     previewTransport.setSource(nullptr);
     previewReaderSource.reset();
     previewLengthSeconds = 0.0;

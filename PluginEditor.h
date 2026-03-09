@@ -134,6 +134,9 @@ private:
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::String playingFilePath;
     double previewLengthSeconds = 0.0;
+    int previewRequestId = 0;      // incremented on each file selection
+    juce::File pendingPreviewFile; // file waiting for the debounce window to expire
+    juce::int64 pendingPreviewTime = 0; // ms timestamp when pendingPreviewFile was set
 
     struct AudioPreviewStrip : juce::Component
     {
@@ -188,6 +191,7 @@ private:
     void goBack();
     void goForward();
     void playSelectedFile();
+    void loadAndStartPreview(const juce::File& file, int requestId);
     int getContentBottom() const;
     juce::Rectangle<int> getLogoPanelBounds() const;
     juce::Rectangle<int> getPackListBounds() const;

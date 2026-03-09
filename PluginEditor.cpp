@@ -169,7 +169,11 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     settingsOverlay = std::make_unique<SettingsOverlayComponent>(processor);
     setSize(920, 600);
     setResizeLimits(860, 580, 4096, 4096);
-    setWantsKeyboardFocus(true);
+    // Do NOT set keyboard focus on the top-level editor: doing so causes the
+    // plugin window to steal focus from the host, breaking the DAW's spacebar
+    // transport shortcut. Key events are still delivered to this listener when
+    // any child component (e.g. column browser, queue list) has focus.
+    setWantsKeyboardFocus(false);
     addKeyListener(this);
 
     formatManager.registerBasicFormats();
@@ -258,7 +262,19 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
         updateBreadcrumb();
         updateForwardButtonState();
     };
-    columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
+    columnBrowser.onFileSelected = [this](int row) {
+        (void)row;
+        // Debounce without allocating a new timer object per keypress.
+        // We simply stamp the pending file + timestamp and let the existing
+        // 100 ms timerCallback() check whether 90 ms of silence has elapsed.
+        // This avoids heap allocations, SafePointer construction (global lock),
+        // and JUCE timer-list mutations on every arrow-key event.
+        ++previewRequestId;
+        pendingPreviewFile = columnBrowser.getSelectedFileInLastColumn();
+        pendingPreviewTime = juce::Time::currentTimeMillis();
+        if (!isTimerRunning())
+            startTimer(100);
+    };
     columnBrowser.onKeyLeft = [this] { collapseAudioPreview(); goBack(); };
     columnBrowser.onFilePreviewToggled = [this](int row, bool expand) {
         if (expand)
@@ -274,6 +290,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
         {
             processor.stopPreview();
             playingFilePath.clear();
+            pendingPreviewFile = juce::File();
             columnBrowser.setPlayingFilePath({});
             columnBrowser.setExpandedPreviewRow(-1);
             hideAudioPreview();
@@ -1359,27 +1376,66 @@ void MagicFoldersEditor::playSelectedFile()
     juce::String path = file.getFullPathName();
     if (path == playingFilePath)
     {
+        // User clicked the same file — toggle off.
         processor.stopPreview();
         playingFilePath.clear();
+        pendingPreviewFile = juce::File();  // also cancel any queued preview
         columnBrowser.setPlayingFilePath({});
-        stopTimer();
+        if (!isTimerRunning() || !pendingPreviewFile.existsAsFile())
+            stopTimer();
         return;
     }
-    processor.stopPreview();
-    std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
-    if (!reader) return;
-    double fileSampleRate = juce::jmax(1.0, reader->sampleRate);
-    previewLengthSeconds = reader->lengthInSamples / fileSampleRate;
-    if (previewLengthSeconds <= 0.0) previewLengthSeconds = 1.0;
-    auto source = std::make_unique<juce::AudioFormatReaderSource>(reader.get(), true);
-    reader.release();
-    processor.setPreviewSource(std::move(source), fileSampleRate, previewLengthSeconds);
-    processor.startPreview();
-    playingFilePath = path;
-    columnBrowser.setPlayingFilePath(path);
-    updateBreadcrumb();
-    repaint();
-    startTimer(100);
+    int myId = ++previewRequestId;
+    loadAndStartPreview(file, myId);
+}
+
+void MagicFoldersEditor::loadAndStartPreview(const juce::File& file, int requestId)
+{
+    // Open the file on a background thread so Ableton's main thread (which is
+    // also JUCE's message thread) is never blocked by file I/O or audio-format
+    // header parsing — particularly important for MP3/FLAC files that can take
+    // 10-50 ms to open. Once the reader is ready, we hop back to the message
+    // thread to install the source into the transport (which requires the
+    // message thread for JUCE's AudioTransportSource thread-safety contract).
+    juce::Component::SafePointer<MagicFoldersEditor> safeThis(this);
+
+    juce::Thread::launch([safeThis, requestId, file]()
+    {
+        // Create a local format manager for this thread.
+        juce::AudioFormatManager localFmt;
+        localFmt.registerBasicFormats();
+
+        // This is the only potentially slow operation — open + header parse.
+        auto* rawReader = localFmt.createReaderFor(file);
+
+        // Hop back to the message thread to install the source.
+        juce::MessageManager::callAsync([safeThis, requestId, rawReader, file]() mutable
+        {
+            std::unique_ptr<juce::AudioFormatReader> reader(rawReader);
+
+            auto* self = safeThis.getComponent();
+            if (!self || requestId != self->previewRequestId)
+                return; // stale request (user already moved to another file)
+
+            if (!reader) { self->processor.stopPreview(); return; }
+
+            double fileSampleRate = juce::jmax(1.0, reader->sampleRate);
+            double len = reader->lengthInSamples / fileSampleRate;
+            if (len <= 0.0) len = 1.0;
+
+            auto source = std::make_unique<juce::AudioFormatReaderSource>(reader.get(), true);
+            reader.release();
+
+            self->previewLengthSeconds = len;
+            self->processor.setPreviewSource(std::move(source), fileSampleRate, len);
+            self->processor.startPreview();
+            self->playingFilePath = file.getFullPathName();
+            self->columnBrowser.setPlayingFilePath(self->playingFilePath);
+            self->updateBreadcrumb();
+            self->repaint();
+            self->startTimer(100);
+        });
+    });
 }
 
 void MagicFoldersEditor::AudioPreviewStrip::PlayPauseButton::paintButton(juce::Graphics& g, bool highlighted, bool)
@@ -1527,6 +1583,7 @@ void MagicFoldersEditor::collapseAudioPreview()
     columnBrowser.setPlayingFilePath({});
     processor.stopPreview();
     playingFilePath.clear();
+    pendingPreviewFile = juce::File();
     hideAudioPreview();
     stopTimer();
     columnBrowser.repaint();
@@ -1534,15 +1591,34 @@ void MagicFoldersEditor::collapseAudioPreview()
 
 void MagicFoldersEditor::timerCallback()
 {
-    auto* transport = processor.getPreviewTransport();
-    if (transport && !transport->isPlaying() && !playingFilePath.isEmpty())
+    // ── Debounced preview trigger ─────────────────────────────────────────────
+    // Fire only after the selection has been stable for ≥ 90 ms, avoiding
+    // rapid stop/start cycles while the user holds an arrow key.
+    if (pendingPreviewFile.existsAsFile()
+        && juce::Time::currentTimeMillis() - pendingPreviewTime >= 90
+        && pendingPreviewFile.getFullPathName() != playingFilePath)
     {
-        playingFilePath.clear();
-        columnBrowser.setPlayingFilePath({});
-        columnBrowser.setExpandedPreviewRow(-1);
-        stopTimer();
-        columnBrowser.repaint();
+        juce::File file = pendingPreviewFile;
+        pendingPreviewFile = juce::File();
+        loadAndStartPreview(file, previewRequestId);
     }
+
+    // ── End-of-playback detection ─────────────────────────────────────────────
+    if (!playingFilePath.isEmpty())
+    {
+        auto* transport = processor.getPreviewTransport();
+        if (transport && !transport->isPlaying())
+        {
+            playingFilePath.clear();
+            columnBrowser.setPlayingFilePath({});
+            columnBrowser.setExpandedPreviewRow(-1);
+            columnBrowser.repaint();
+        }
+    }
+
+    // ── Auto-stop the timer when nothing is active or pending ─────────────────
+    if (playingFilePath.isEmpty() && !pendingPreviewFile.existsAsFile())
+        stopTimer();
 }
 
 juce::Rectangle<int> MagicFoldersEditor::getLogoPanelBounds() const
