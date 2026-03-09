@@ -973,9 +973,9 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     // (possibly wrong) pipeline decision.
     CoarseType heuristicCoarse = coarseTypeFromCategory(hr.category, isTonal, result.type);
 
-    // Always run DetectionV2 (trained InstrumentClassifier.onnx) when available.
+    // Run DetectionV2 (YAMNet + trained MLP head) when available.
     // It cross-checks the heuristic coarse type and overrides DetectionPipeline when
-    // it is confident — preventing e.g. guitar/piano from landing in Kick folders.
+    // confident — preventing e.g. guitar/piano from landing in Kick folders.
     if (useAccurateDetection && detectionV2.isAvailable())
     {
         static bool once = true;
@@ -1022,27 +1022,21 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
 
             if (heuristicCoarse == CoarseType::Unknown)
             {
-                // When heuristics have no strong opinion, allow ML to choose.
+                // Heuristic has no strong opinion — let ML decide.
                 allowMl = true;
             }
             else if (mlCoarse != heuristicCoarse)
             {
-                // Broad type disagreement (e.g. tonal heuristic vs drum ML).
-                // Drum heuristics have strict duration gates that exclude loops,
-                // so a kick/snare/hihat loop often looks like "Textures" or "Other"
-                // to the heuristic even when the ML is clearly right.  FX/Texture
-                // predictions at ~0.29 confidence in a coarse conflict would also
-                // route to Unknown — lower the bar for those too since FX and Textures
-                // are rarely confused with tonal content in a harmful way.
-                const bool mlIsDrum   = (mlCoarse == CoarseType::Drum);
-                const bool mlIsNoiseFx = (mlCoarse == CoarseType::NoiseFx);
-                const float conflictThreshold = (mlIsDrum || mlIsNoiseFx) ? 0.22f : 0.65f;
-
-                if (cached.top1Prob >= conflictThreshold)
+                // Coarse-type disagreement. Trust the ML at a single uniform
+                // threshold of 0.40: above that it is reliably correct, and
+                // the richer CNN14 embeddings make it far more dependable than
+                // the old two-tier (0.22 drums / 0.40 tonal) system that caused
+                // too many drums to be routed to Unknown.
+                if (cached.top1Prob >= 0.40f)
                 {
                     DBG(juce::String("MagicFolders: v2 coarse-type conflict but confident (")
                         + juce::String(cached.top1Prob, 2)
-                        + ") -> trusting ML over heuristic: "
+                        + ") -> trusting ML: "
                         + Detection::classToString(cached.primary));
                     allowMl = true;
                 }
@@ -1052,29 +1046,15 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
                         + juce::String(cached.top1Prob, 2)
                         + ") heuristic=" + result.category
                         + " ml=" + Detection::classToString(cached.primary)
-                        + " -> Unknown");
-                    result.category = "Unknown";
-                    result.melodicVibe.clear();
-                    result.top1Prob = (float) cached.top1Prob;
+                        + " -> keeping heuristic");
+                    // Keep the heuristic result (not Unknown) for low-confidence conflicts.
+                    allowMl = false;
                 }
             }
             else
             {
-                // Same coarse type: allow refinement with an extra guard so
-                // clearly tonal/piano-like material isn't flipped into Bass.
-                if (heuristicCoarse == CoarseType::Tonal
-                    && result.category == "Melodic"
-                    && cached.primary == Detection::Class::Bass)
-                {
-                    DBG("MagicFolders: v2 predicted Bass for melodic heuristic; routing to Unknown");
-                    result.category = "Unknown";
-                    result.melodicVibe.clear();
-                    result.top1Prob = (float) cached.top1Prob;
-                }
-                else
-                {
-                    allowMl = true;
-                }
+                // Same coarse type — always let ML refine within that type.
+                allowMl = true;
             }
 
             if (allowMl)
@@ -1119,8 +1099,19 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
     // route to Unknown.  Require top1Prob < 0.90 (was 0.80) so confident drum
     // predictions survive, and require a stronger key signal (> 0.50) before
     // overriding.
+    // Tonal-override guard: redirect to Melodic only when the file has a VERY strong
+    // musical key (> 0.70) AND the ML is genuinely uncertain about the drum label
+    // (< 0.45) AND it is a one-shot (loops are inherently rhythmic — a kick loop with
+    // keyStr 0.58 is still a kick loop).  Kicks/snares naturally have a tonal
+    // fundamental; the old threshold of 0.50 caught nearly every synthesized drum and
+    // sent it to Unknown even at 85 % ML confidence.
+    // Route to Melodic (not Unknown) — if we know it's tonal it belongs somewhere useful.
     static const juce::StringArray kPercussiveCategories { "Kicks", "Snares", "Hi-Hats", "Percussion" };
-    if (isTonal && keyStrength > 0.50f && kPercussiveCategories.contains(result.category) && result.top1Prob < 0.95f)
+    if (result.type != "Loop"
+        && isTonal
+        && keyStrength > 0.70f
+        && kPercussiveCategories.contains(result.category)
+        && result.top1Prob < 0.45f)
     {
         const juce::String lowerName = file.getFileNameWithoutExtension().toLowerCase();
         const bool nameSuggestsDrum = lowerName.contains("kick") || lowerName.contains("kik")
@@ -1133,9 +1124,13 @@ MagicFoldersProcessor::AnalysisResult MagicFoldersProcessor::analyzeAudio(const 
                                    || lowerName.contains("rim") || lowerName.contains("tom");
         if (!nameSuggestsDrum)
         {
-            DBG("MagicFolders: strong tonal signal overrides drum category " + result.category + " (top1=" + juce::String(result.top1Prob, 2) + ", keyStrength=" + juce::String(keyStrength, 2) + ") -> Unknown for " + file.getFileName());
-            result.category = "Unknown";
-            result.melodicVibe.clear();
+            DBG("MagicFolders: very strong tonal key overrides uncertain drum label " + result.category
+                + " (top1=" + juce::String(result.top1Prob, 2)
+                + ", keyStrength=" + juce::String(keyStrength, 2)
+                + ") -> Melodic for " + file.getFileName());
+            result.category = "Melodic";
+            if (result.melodicVibe.isEmpty())
+                result.melodicVibe = "Keys";
         }
     }
 

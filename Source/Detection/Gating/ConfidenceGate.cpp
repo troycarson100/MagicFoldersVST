@@ -39,7 +39,6 @@ namespace DetectionGating
 
         const float minTopScore = strictMode ? 0.25f : 0.20f;
         const float minMargin = strictMode ? 0.08f : 0.05f;
-        const float minVoteConsistency = strictMode ? 0.60f : 0.50f;
 
         const auto top1 = getTop(categoryScores);
         const auto top2 = getTop(categoryScores, top1.index);
@@ -54,24 +53,9 @@ namespace DetectionGating
             out.reason = 2;
         }
 
-        // Window vote consistency: majority of windows should agree on top category.
-        if (!windowScores.empty())
-        {
-            const int numWindows = (int) windowScores.size();
-            int agree = 0;
-            for (const auto& ws : windowScores)
-            {
-                if ((int) ws.size() <= top1.index || top1.index < 0)
-                    continue;
-                // Assume YamnetModel and CategoryMapper keep consistent index mapping.
-                const float s = ws[(size_t) top1.index];
-                if (s >= 0.5f * top1.score)
-                    ++agree;
-            }
-            const float consistency = (numWindows > 0) ? (agree / (float) numWindows) : 1.0f;
-            if (consistency < minVoteConsistency && out.reason == 0)
-                out.reason = 3;
-        }
+        // Vote-consistency check removed: YamnetRunner now runs on the full file
+        // (not per-window slices), so windowScores are no longer available in the
+        // pipeline path. The top-score and margin gates alone are sufficient.
 
         // Fill debug label/score info using category names.
         auto catName = [](DetectionCategory cat) -> juce::String

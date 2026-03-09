@@ -1,19 +1,17 @@
 #include "DetectionPipeline.h"
 
 #include "DSP/Resampler16kMono.h"
-#include "DSP/Windowing.h"
 #include "DSP/LoopOneShotDetector.h"
 #include "DSP/PercussiveHarmonicGate.h"
 #include "Mapping/CategoryMapper.h"
 #include "Gating/ConfidenceGate.h"
-#include "Yamnet/YamnetModel.h"
+#include "YamnetRunner.h"
 
 namespace DetectionPipeline
 {
     using namespace DetectionDSP;
     using namespace DetectionMapping;
     using namespace DetectionGating;
-    using namespace DetectionYamnet;
 
     DetectionResult detectFile(const juce::File& file, const DetectionConfig& config)
     {
@@ -53,23 +51,29 @@ namespace DetectionPipeline
         Resampler16kMono resampler;
         resampler.process(buffer, sampleRate, mono16k);
 
-        // Windowing at 16 kHz.
-        auto windows = Windowing::makeWindows(mono16k, config.maxWindows);
-
-        YamnetModel yamnet;
-        if (!yamnet.isValid())
+        // Run YamnetRunner on the full resampled buffer in one shot.
+        // This produces the correct mean‖std‖max 1563-d features the head was
+        // trained on. The old per-window approach double-windowed the audio
+        // (pipeline pre-cut + YamnetRunner internal loop), collapsing std to ~0.
+        Detection::YamnetRunner yamnetRunner;
+        if (!yamnetRunner.isAvailable())
         {
             result.debug.gateReason = GateReason::ModelUnavailable;
             return result;
         }
 
-        // Run YAMNet on each window and aggregate scores.
-        std::vector<std::vector<float>> windowScores;
-        windowScores.reserve(windows.size());
-        for (const auto& w : windows)
-            windowScores.push_back(yamnet.run(w));
+        juce::AudioBuffer<float> mono16kBuf(1, (int) mono16k.size());
+        for (int i = 0; i < (int) mono16k.size(); ++i)
+            mono16kBuf.setSample(0, i, mono16k[(size_t) i]);
 
-        const auto aggregated = YamnetModel::aggregateScores(windowScores);
+        const Detection::YamnetPrediction pred = yamnetRunner.predict(mono16kBuf, 16000.0);
+        if (!pred.valid)
+        {
+            result.debug.gateReason = GateReason::ModelUnavailable;
+            return result;
+        }
+
+        std::vector<float> aggregated(pred.logits.begin(), pred.logits.end());
 
         // DSP features and loop/one-shot.
         PercussiveHarmonicFeatures feats = PercussiveHarmonicGate::analyze(buffer, sampleRate);
@@ -86,9 +90,9 @@ namespace DetectionPipeline
         CategoryMapper mapper;
         auto categoryScores = mapper.map(aggregated, feats);
 
-        // Confidence gating and vote consistency (Unknown when not confident).
+        // Confidence gating (Unknown when not confident).
         ConfidenceGate gate;
-        auto decision = gate.apply(categoryScores, windowScores, config.strictMode);
+        auto decision = gate.apply(categoryScores, {}, config.strictMode);
 
         result.category = decision.category;
         result.confidence = decision.confidence;

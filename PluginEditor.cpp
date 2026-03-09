@@ -173,8 +173,6 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
     addKeyListener(this);
 
     formatManager.registerBasicFormats();
-    sourcePlayer.setSource(&transportSource);
-    deviceManager.initialiseWithDefaultDevices(0, 2);
 
     // Sidebar assets and plus button
     logoDrawable = AssetLoader::getLogo();
@@ -261,7 +259,7 @@ MagicFoldersEditor::MagicFoldersEditor(MagicFoldersProcessor& p)
         updateForwardButtonState();
     };
     columnBrowser.onFileSelected = [this](int row) { (void)row; playSelectedFile(); };
-    columnBrowser.onKeyLeft = [this] { goBack(); };
+    columnBrowser.onKeyLeft = [this] { collapseAudioPreview(); goBack(); };
     columnBrowser.onFilePreviewToggled = [this](int row, bool expand) {
         if (expand)
         {
@@ -526,10 +524,7 @@ MagicFoldersEditor::~MagicFoldersEditor()
     if (packListHoverListener)
         removeMouseListener(packListHoverListener.get());
     processor.stopPreview();
-    transportSource.setSource(nullptr);
     readerSource.reset();
-    sourcePlayer.setSource(nullptr);
-    deviceManager.closeAudioDevice();
 }
 
 juce::Rectangle<int> MagicFoldersEditor::QueueListContent::getClearBtnBounds() const

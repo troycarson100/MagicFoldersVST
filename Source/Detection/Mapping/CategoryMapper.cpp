@@ -37,7 +37,8 @@ namespace DetectionMapping
         if (n > 9)  add(DetectionCategory::FX,           yamnetScores[9]);
         if (n > 10) add(DetectionCategory::TextureAtmos, yamnetScores[10]);
         if (n > 11) add(DetectionCategory::Vocal,        yamnetScores[11]);
-        if (n > 12) add(DetectionCategory::Drums,        yamnetScores[12]);
+        // Index 12 is the "Other" class with no training data — intentionally
+        // omitted so model uncertainty does not inflate the Drums bucket.
 
         // DSP-dependent weighting: emphasize drums when percussive, tonal when harmonic.
         for (auto& cs : out)
@@ -46,8 +47,7 @@ namespace DetectionMapping
                 cs.category == DetectionCategory::Kick ||
                 cs.category == DetectionCategory::Snare ||
                 cs.category == DetectionCategory::HiHat ||
-                cs.category == DetectionCategory::Perc ||
-                cs.category == DetectionCategory::Drums;
+                cs.category == DetectionCategory::Perc;
 
             const bool tonal =
                 cs.category == DetectionCategory::Bass ||

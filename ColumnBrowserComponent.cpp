@@ -348,11 +348,15 @@ int ColumnBrowserComponent::getTotalContentWidth() const
 
 juce::File ColumnBrowserComponent::getSelectedFileInLastColumn() const
 {
-    if (columnItems.isEmpty() || selectedRowInColumn.size() < columnItems.size())
+    if (columnItems.isEmpty())
         return {};
-    int lastCol = columnItems.size() - 1;
-    int row = selectedRowInColumn[lastCol];
-    juce::File f = getFileAt(lastCol, row);
+    // The file column is always at path.size() — empty placeholder columns appended
+    // by refreshColumns() for the 3-column minimum must not be used here.
+    const int fileCol = (int)path.size();
+    if (fileCol < 0 || fileCol >= columnItems.size() || fileCol >= selectedRowInColumn.size())
+        return {};
+    int row = selectedRowInColumn[fileCol];
+    juce::File f = getFileAt(fileCol, row);
     return (f.existsAsFile() ? f : juce::File());
 }
 
@@ -1101,8 +1105,16 @@ bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)
     {
         if (sel > 0)
         {
-            selectedRowInColumn.set(col, sel - 1);
+            int newSel = sel - 1;
+            selectedRowInColumn.set(col, newSel);
             repaint();
+            const int fileCol = (int)path.size();
+            if (col == fileCol)
+            {
+                juce::File f = items.getReference(newSel);
+                if (f.existsAsFile() && onFilePreviewToggled)
+                    onFilePreviewToggled(newSel, true);
+            }
             return true;
         }
         return false;
@@ -1111,8 +1123,16 @@ bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)
     {
         if (sel < items.size() - 1)
         {
-            selectedRowInColumn.set(col, sel + 1);
+            int newSel = sel + 1;
+            selectedRowInColumn.set(col, newSel);
             repaint();
+            const int fileCol = (int)path.size();
+            if (col == fileCol)
+            {
+                juce::File f = items.getReference(newSel);
+                if (f.existsAsFile() && onFilePreviewToggled)
+                    onFilePreviewToggled(newSel, true);
+            }
             return true;
         }
         return false;
@@ -1134,6 +1154,24 @@ bool ColumnBrowserComponent::keyPressed(const juce::KeyPress& key)
             if (f.isDirectory() && onFolderSelected)
             {
                 onFolderSelected(col, sel);
+                // After navigation, path and columnItems are updated (setPath → refreshColumns ran).
+                // Auto-select and preview the first file in the new file column.
+                const int newFileCol = (int)path.size();
+                if (newFileCol >= 0 && newFileCol < columnItems.size())
+                {
+                    const auto& newColItems = columnItems.getReference(newFileCol);
+                    for (int r = 0; r < newColItems.size(); ++r)
+                    {
+                        if (newColItems.getReference(r).existsAsFile())
+                        {
+                            selectedRowInColumn.set(newFileCol, r);
+                            repaint();
+                            if (onFilePreviewToggled)
+                                onFilePreviewToggled(r, true);
+                            break;
+                        }
+                    }
+                }
                 return true;
             }
         }

@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-YAMNet Transfer Learning v2 — MagicFolders InstrumentClassifier
+CNN14 / YAMNet Transfer Learning — MagicFolders InstrumentClassifier
 
-Architecture:
+Architecture (CNN14 mode — preferred):
+    Audio file  →  CNN14 (frozen, 32000-sample windows @ 32kHz, output [1, 2048])
+                →  Per-window stats: [mean ‖ std ‖ max]  →  [6144] feature vector
+                →  MLP (6144 → 512 → 256 → 13)  →  instrument logits
+
+Architecture (YAMNet fallback — used when cnn14_backbone.onnx not found):
     Audio file  →  YAMNet (frozen, 15600-sample windows @ 16kHz, output [1, 521])
                 →  Per-window stats: [mean ‖ std ‖ max]  →  [1563] feature vector
                 →  MLP (1563 → 512 → 256 → 13)  →  instrument logits
 
-Improvements over v1:
-  • Richer features: mean+std+max of per-window YAMNet outputs (1563-d vs 521-d)
-    — std captures temporal variance (hi-hat loops vs snares differ here)
-    — max preserves the strongest transient signal (critical for loops)
-  • Data augmentation: time-stretch ×{0.9, 1.1} + Gaussian noise, tripling data
-  • Class balancing: Snare capped at MAX_PER_CLASS, Lead/Pad oversampled
-  • ReduceLROnPlateau scheduler + 300 epochs + larger MLP (512 hidden)
+To switch backbone:
+    python3 training/download_cnn14.py   # one-time download (~340 MB)
+    python3 training/train_yamnet_transfer.py   # auto-detects CNN14
 
 Usage:
     cd "/Users/troycarson/Documents/JUCE Projects/MagicFoldersVST"
@@ -21,7 +22,8 @@ Usage:
 
 Output:
     assets/Models/yamnet_head.onnx
-    training/yamnet_features_v2_cache.npz
+    training/cnn14_features_v1_cache.npz  (when CNN14 backbone found)
+    training/yamnet_features_v3_cache.npz  (YAMNet fallback)
 """
 
 import os
@@ -29,7 +31,7 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 import onnxruntime as ort
@@ -51,51 +53,83 @@ NUM_CLASSES_OUTPUT  = 13   # model outputs 13 logits (Other = always low)
 # ─── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).parent
 REPO_ROOT   = SCRIPT_DIR.parent
+
+# Backbone candidates (CNN14 preferred, YAMNet fallback)
+CNN14_ONNX  = SCRIPT_DIR / "cnn14_backbone.onnx"          # from download_cnn14.py
 YAMNET_ONNX = REPO_ROOT / "assets" / "Models" / "yamnet.onnx"
+
 DATA_ROOT   = Path.home() / "Documents" / "MagicFoldersTraining"
 OUT_MODEL   = REPO_ROOT / "assets" / "Models" / "yamnet_head.onnx"
-CACHE_FILE  = SCRIPT_DIR / "yamnet_features_v3_cache.npz"   # v3 — includes loop sub-folders
 
-YAMNET_RATE    = 16000
-YAMNET_WINDOW  = 15600   # samples @ 16 kHz (~0.975 s)
-HOP_SAMPLES    = YAMNET_WINDOW // 2   # 50% overlap
-FEATURE_DIM    = 521 * 3             # mean + std + max per YAMNet window
+# ─── Backbone selection ───────────────────────────────────────────────────────
+USE_CNN14 = CNN14_ONNX.exists()
+
+if USE_CNN14:
+    BACKBONE_ONNX  = CNN14_ONNX
+    BACKBONE_RATE  = 32000
+    BACKBONE_WINDOW = 32000    # 1 s at 32 kHz
+    BACKBONE_DIM   = 2048
+    BACKBONE_INPUT = "waveform"
+    BACKBONE_OUTPUT = "embedding"
+    CACHE_FILE     = SCRIPT_DIR / "cnn14_features_v1_cache.npz"
+    print("✓  CNN14 backbone detected — using richer 2048-d embeddings")
+else:
+    BACKBONE_ONNX  = YAMNET_ONNX
+    BACKBONE_RATE  = 16000
+    BACKBONE_WINDOW = 15600   # ~0.975 s at 16 kHz
+    BACKBONE_DIM   = 521
+    BACKBONE_INPUT = "waveform_binary"
+    BACKBONE_OUTPUT = None    # YAMNet: session.run returns list, take [0][0]
+    CACHE_FILE     = SCRIPT_DIR / "yamnet_features_v3_cache.npz"
+    print("⚠  CNN14 not found — falling back to YAMNet (521-d)")
+    print(f"   (run python3 training/download_cnn14.py to upgrade)")
+
+HOP_SAMPLES  = BACKBONE_WINDOW // 2   # 50% overlap
+FEATURE_DIM  = BACKBONE_DIM * 3       # mean + std + max
 
 # Class balancing: cap large classes, set floor for small ones
-# Raised to 600 to accommodate new loop sub-folders (loops/ + root one-shots).
-# Snare was 685 before loops; with loops it may hit 800+ so cap prevents domination.
-MAX_PER_CLASS  = 600   # cap to prevent any single class dominating
+MAX_PER_CLASS  = 2000  # raised for better coverage of weak classes
 MIN_PER_CLASS  = 300   # below this, add augmented copies
 
 
 # ─── Feature extraction ───────────────────────────────────────────────────────
 
-def run_yamnet(buf: np.ndarray, session: ort.InferenceSession) -> np.ndarray:
-    """Run one 15600-sample window through YAMNet → [521] probabilities."""
-    assert len(buf) == YAMNET_WINDOW
-    return session.run(None, {"waveform_binary": buf.astype(np.float32)})[0][0]
+def run_backbone(buf: np.ndarray, session: ort.InferenceSession) -> np.ndarray:
+    """Run one window through the backbone → [BACKBONE_DIM] embedding."""
+    assert len(buf) == BACKBONE_WINDOW
+    if USE_CNN14:
+        # CNN14 expects [batch, time] — pass as 2-D
+        inp = {BACKBONE_INPUT: buf.reshape(1, -1).astype(np.float32)}
+        result = session.run(None, inp)
+        emb = result[0][0]      # shape: (BACKBONE_DIM,) from [1, 2048]
+    else:
+        # YAMNet expects a flat [windowSamples] 1-D vector
+        inp = {BACKBONE_INPUT: buf.astype(np.float32)}
+        result = session.run(None, inp)
+        emb = result[0][0]      # shape: (521,) from [1, 521] output
+    return emb.astype(np.float32)
 
 
 def extract_features(waveform: np.ndarray,
                      session: ort.InferenceSession) -> np.ndarray:
-    """Return 1563-d feature vector [mean ‖ std ‖ max] from all windows."""
+    """Return FEATURE_DIM-d vector [mean ‖ std ‖ max] from all windows."""
     peak = np.abs(waveform).max()
     if peak > 1e-8:
         waveform = waveform / peak
 
     n = len(waveform)
-    starts = list(range(0, max(1, n - YAMNET_WINDOW + 1), HOP_SAMPLES))
+    starts = list(range(0, max(1, n - BACKBONE_WINDOW + 1), HOP_SAMPLES))
     if not starts:
         starts = [0]
 
     frames = []
     for s in starts:
-        buf = np.zeros(YAMNET_WINDOW, dtype=np.float32)
-        end = min(s + YAMNET_WINDOW, n)
+        buf = np.zeros(BACKBONE_WINDOW, dtype=np.float32)
+        end = min(s + BACKBONE_WINDOW, n)
         buf[:end - s] = waveform[s:end]
-        frames.append(run_yamnet(buf, session))
+        frames.append(run_backbone(buf, session))
 
-    frames = np.stack(frames)                  # (W, 521)
+    frames = np.stack(frames)          # (W, BACKBONE_DIM)
     feat_mean = frames.mean(axis=0)
     feat_std  = frames.std(axis=0)
     feat_max  = frames.max(axis=0)
@@ -104,7 +138,7 @@ def extract_features(waveform: np.ndarray,
 
 def load_audio(path: str) -> "np.ndarray | None":
     try:
-        audio, _ = librosa.load(path, sr=YAMNET_RATE, mono=True,
+        audio, _ = librosa.load(path, sr=BACKBONE_RATE, mono=True,
                                 res_type="kaiser_fast")
         return audio.astype(np.float32)
     except Exception as e:
@@ -146,7 +180,7 @@ def build_dataset(session: ort.InferenceSession):
                                        ".mp3", ".flac", ".ogg")):
                     files.append(os.path.join(root, f))
 
-        # Cap large classes
+        # Cap large classes (raised to 2000 for better weak-class coverage)
         if len(files) > MAX_PER_CLASS:
             rng = np.random.default_rng(42)
             files = list(rng.choice(files, MAX_PER_CLASS, replace=False))
@@ -198,17 +232,35 @@ class InstrumentMLP(nn.Module):
     def __init__(self, in_dim: int = FEATURE_DIM, h1: int = 512, h2: int = 256,
                  num_classes: int = NUM_CLASSES_OUTPUT):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, h1),
-            nn.BatchNorm1d(h1),
-            nn.ReLU(),
-            nn.Dropout(0.35),
-            nn.Linear(h1, h2),
-            nn.BatchNorm1d(h2),
-            nn.ReLU(),
-            nn.Dropout(0.25),
-            nn.Linear(h2, num_classes),
-        )
+        # CNN14 features (6144-d) benefit from an extra hidden layer to compress.
+        if in_dim >= 4096:
+            self.net = nn.Sequential(
+                nn.Linear(in_dim, 1024),
+                nn.BatchNorm1d(1024),
+                nn.ReLU(),
+                nn.Dropout(0.4),
+                nn.Linear(1024, h1),
+                nn.BatchNorm1d(h1),
+                nn.ReLU(),
+                nn.Dropout(0.35),
+                nn.Linear(h1, h2),
+                nn.BatchNorm1d(h2),
+                nn.ReLU(),
+                nn.Dropout(0.25),
+                nn.Linear(h2, num_classes),
+            )
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(in_dim, h1),
+                nn.BatchNorm1d(h1),
+                nn.ReLU(),
+                nn.Dropout(0.35),
+                nn.Linear(h1, h2),
+                nn.BatchNorm1d(h2),
+                nn.ReLU(),
+                nn.Dropout(0.25),
+                nn.Linear(h2, num_classes),
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
@@ -319,7 +371,7 @@ def export_onnx(model: InstrumentMLP, out_path: Path) -> None:
         input_names=["yamnet_features"],
         output_names=["logits"],
         dynamic_axes={"yamnet_features": {0: "batch"}, "logits": {0: "batch"}},
-        opset_version=13,
+        opset_version=14,
         do_constant_folding=True,
     )
     # Ensure weights are stored inline (not split into .data sidecar file)
@@ -338,14 +390,20 @@ def export_onnx(model: InstrumentMLP, out_path: Path) -> None:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    backbone_name = "CNN14" if USE_CNN14 else "YAMNet"
     print("=" * 60)
-    print("  YAMNet Transfer Learning v2 — MagicFolders")
-    print(f"  Feature dim: {FEATURE_DIM}  (mean+std+max of 521-d windows)")
+    print(f"  MagicFolders Transfer Learning ({backbone_name})")
+    print(f"  Backbone dim: {BACKBONE_DIM}   Feature dim: {FEATURE_DIM}  (mean+std+max)")
+    print(f"  Sample rate : {BACKBONE_RATE} Hz   Window: {BACKBONE_WINDOW} samples")
     print("=" * 60)
     print()
 
-    if not YAMNET_ONNX.exists():
-        print(f"ERROR: yamnet.onnx not found at {YAMNET_ONNX}")
+    if not BACKBONE_ONNX.exists():
+        if USE_CNN14:
+            print(f"ERROR: cnn14_backbone.onnx not found at {BACKBONE_ONNX}")
+            print("  Run: python3 training/download_cnn14.py")
+        else:
+            print(f"ERROR: yamnet.onnx not found at {BACKBONE_ONNX}")
         sys.exit(1)
     if not DATA_ROOT.exists():
         print(f"ERROR: Training data not found at {DATA_ROOT}")
@@ -353,7 +411,7 @@ def main():
 
     # ── Feature extraction ────────────────────────────────────────────────────
     if CACHE_FILE.exists():
-        ans = input(f"v2 cache found. Re-use? [Y/n] ").strip().lower()
+        ans = input(f"Cache found ({CACHE_FILE.name}). Re-use? [Y/n] ").strip().lower()
         if ans in ("", "y", "yes"):
             print("Loading cached features...")
             data = np.load(CACHE_FILE)
@@ -363,10 +421,10 @@ def main():
             CACHE_FILE.unlink()
 
     if not CACHE_FILE.exists():
-        print(f"Loading YAMNet from {YAMNET_ONNX}...")
-        yamnet = ort.InferenceSession(str(YAMNET_ONNX))
-        print("Extracting features + augmenting (this will take 10-20 min)...")
-        X, y = build_dataset(yamnet)
+        print(f"Loading {backbone_name} from {BACKBONE_ONNX}...")
+        backbone = ort.InferenceSession(str(BACKBONE_ONNX))
+        print(f"Extracting features with {backbone_name} (this may take 20-40 min for CNN14)...")
+        X, y = build_dataset(backbone)
         np.savez(CACHE_FILE, features=X, labels=y)
         print(f"Cached to {CACHE_FILE}")
 
@@ -380,7 +438,10 @@ def main():
 
     print()
     print("✓ Done!  Rebuild the plugin to embed the new yamnet_head.onnx.")
-    print(f"  Feature dim = {FEATURE_DIM}  (C++ YamnetRunner will auto-detect from ONNX shape)")
+    print(f"  Backbone: {backbone_name}   Feature dim = {FEATURE_DIM}")
+    if USE_CNN14:
+        print("  The C++ YamnetRunner will use CNN14 if cnn14_backbone.onnx is present.")
+    print(f"  (C++ YamnetRunner reads input dim from ONNX yamnet_head shape)")
 
 
 if __name__ == "__main__":

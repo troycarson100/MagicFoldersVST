@@ -9,12 +9,34 @@
 
 namespace Detection
 {
-    // The official YAMNet TFLite (converted to ONNX) expects exactly this many
-    // samples at 16 kHz per inference call (~0.975 s).
-    static constexpr int kYamnetWindowSamples = 15600;
-    static constexpr int kYamnetFeatureDim    = 521;
-    // v2 head takes [mean ‖ std ‖ max] across windows = 521*3 = 1563-d input.
-    static constexpr int kHeadFeatureDim      = kYamnetFeatureDim * 3;
+    // ── Backbone configuration ──────────────────────────────────────────────
+    // CNN14 (preferred): 32 kHz, 1-s windows, 2048-d embeddings.
+    // YAMNet  (fallback): 16 kHz, ~0.975-s windows, 521-d features.
+    // The C++ code tries CNN14 first; if cnn14_backbone.onnx is not present,
+    // it falls back to the YAMNet embedded in BinaryData.
+    //
+    // CNN14 tensor names (as exported by training/download_cnn14.py):
+    //   input:  "waveform"   shape [batch, time]
+    //   output: "embedding"  shape [batch, 2048]
+    //
+    // YAMNet tensor names (as in the embedded yamnet.onnx):
+    //   input:  "waveform_binary"                        shape [15600]
+    //   output: "tower0/network/layer32/final_output"    shape [1, 521]
+
+    static constexpr int    kCnn14WindowSamples  = 32000;   // 1 s at 32 kHz
+    static constexpr int    kCnn14FeatureDim     = 2048;
+    static constexpr double kCnn14SampleRate     = 32000.0;
+
+    static constexpr int    kYamnetWindowSamples = 15600;   // ~0.975 s at 16 kHz
+    static constexpr int    kYamnetFeatureDim    = 521;
+    static constexpr double kYamnetSampleRate    = 16000.0;
+
+    // Runtime-selected values (set during Impl construction).
+    // kHeadFeatureDim = backbone_dim * 3 (mean ‖ std ‖ max).
+    static int    gWindowSamples  = kYamnetWindowSamples;  // overridden to CNN14 when loaded
+    static int    gBackboneDim    = kYamnetFeatureDim;
+    static double gTargetRate     = kYamnetSampleRate;
+    static int    gHeadFeatureDim = kYamnetFeatureDim * 3;
 
     // ── Legacy fallback: hand-crafted AudioSet-521 → MagicFolders-13 mapping ─
     // Used only when yamnet_head.onnx (the trained MLP) is not available.
@@ -121,44 +143,92 @@ namespace Detection
 #if defined(USE_ONNXRUNTIME) && defined(MAGICFOLDERS_HAS_YAMNET_MODEL)
     struct YamnetRunner::Impl
     {
-        OrtEnv*     yamnetEnv     = nullptr;
-        OrtSession* yamnetSession = nullptr;
+        OrtEnv*     backboneEnv   = nullptr;
+        OrtSession* backboneSession = nullptr;
         OrtEnv*     headEnv       = nullptr;
         OrtSession* headSession   = nullptr;
+        bool        hasCnn14      = false;  // true if CNN14 backbone is active
         bool        hasHead       = false;
         bool        available     = false;
+
+        // Tensor names depend on which backbone is loaded.
+        const char* backboneInputName  = nullptr;
+        const char* backboneOutputName = nullptr;
 
         Impl()
         {
             const OrtApi* ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
             if (!ort) return;
 
-            // ── 1. Load yamnet.onnx ──────────────────────────────────────────
-            if (ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "MagicFoldersYamnet", &yamnetEnv))
+            if (ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "MagicFoldersYamnet", &backboneEnv))
                 return;
 
             juce::File modelDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
                                       .getChildFile("MagicFoldersYamnet");
             modelDir.createDirectory();
 
-            juce::File yamnetFile = modelDir.getChildFile("yamnet.onnx");
-            if (!yamnetFile.replaceWithData(BinaryData::yamnet_onnx, BinaryData::yamnet_onnxSize))
-                return;
-
             OrtSessionOptions* opts = nullptr;
             if (ort->CreateSessionOptions(&opts)) return;
 
-            const juce::String yamnetPath = yamnetFile.getFullPathName();
-            OrtStatus* status = ort->CreateSession(yamnetEnv,
+            // ── 1a. Try CNN14 backbone (preferred — stored on disk) ──────────
+            juce::File cnn14File = modelDir.getChildFile("cnn14_backbone.onnx");
+            if (cnn14File.existsAsFile())
+            {
+                const juce::String cnn14Path = cnn14File.getFullPathName();
+                OrtStatus* st = ort->CreateSession(backboneEnv,
 #if defined(_WIN32)
-                (const ORTCHAR_T*) yamnetPath.toWideCharPointer(),
+                    (const ORTCHAR_T*) cnn14Path.toWideCharPointer(),
 #else
-                (const ORTCHAR_T*) yamnetPath.toRawUTF8(),
+                    (const ORTCHAR_T*) cnn14Path.toRawUTF8(),
 #endif
-                opts, &yamnetSession);
-            ort->ReleaseSessionOptions(opts);
-            if (status) { ort->ReleaseStatus(status); return; }
+                    opts, &backboneSession);
+                if (!st)
+                {
+                    hasCnn14 = true;
+                    gWindowSamples  = kCnn14WindowSamples;
+                    gBackboneDim    = kCnn14FeatureDim;
+                    gTargetRate     = kCnn14SampleRate;
+                    gHeadFeatureDim = kCnn14FeatureDim * 3;
+                    backboneInputName  = "waveform";
+                    backboneOutputName = "embedding";
+                    DBG("YamnetRunner: CNN14 backbone loaded from " + cnn14Path);
+                }
+                else
+                {
+                    ort->ReleaseStatus(st);
+                    DBG("YamnetRunner: CNN14 found but failed to load — falling back to YAMNet");
+                }
+            }
 
+            // ── 1b. Fallback: embedded yamnet.onnx ───────────────────────────
+            if (!hasCnn14)
+            {
+                juce::File yamnetFile = modelDir.getChildFile("yamnet.onnx");
+                if (!yamnetFile.replaceWithData(BinaryData::yamnet_onnx, BinaryData::yamnet_onnxSize))
+                {
+                    ort->ReleaseSessionOptions(opts);
+                    return;
+                }
+                const juce::String yamnetPath = yamnetFile.getFullPathName();
+                OrtStatus* st = ort->CreateSession(backboneEnv,
+#if defined(_WIN32)
+                    (const ORTCHAR_T*) yamnetPath.toWideCharPointer(),
+#else
+                    (const ORTCHAR_T*) yamnetPath.toRawUTF8(),
+#endif
+                    opts, &backboneSession);
+                if (st) { ort->ReleaseStatus(st); ort->ReleaseSessionOptions(opts); return; }
+
+                gWindowSamples  = kYamnetWindowSamples;
+                gBackboneDim    = kYamnetFeatureDim;
+                gTargetRate     = kYamnetSampleRate;
+                gHeadFeatureDim = kYamnetFeatureDim * 3;
+                backboneInputName  = "waveform_binary";
+                backboneOutputName = "tower0/network/layer32/final_output";
+                DBG("YamnetRunner: YAMNet backbone loaded (CNN14 not available)");
+            }
+
+            ort->ReleaseSessionOptions(opts);
             available = true;
 
 #if defined(MAGICFOLDERS_HAS_YAMNET_HEAD)
@@ -197,41 +267,56 @@ namespace Detection
             const OrtApi* ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
             if (ort)
             {
-                if (headSession)   { ort->ReleaseSession(headSession);   headSession   = nullptr; }
-                if (headEnv)       { ort->ReleaseEnv(headEnv);           headEnv       = nullptr; }
-                if (yamnetSession) { ort->ReleaseSession(yamnetSession); yamnetSession = nullptr; }
-                if (yamnetEnv)     { ort->ReleaseEnv(yamnetEnv);         yamnetEnv     = nullptr; }
+                if (headSession)     { ort->ReleaseSession(headSession);     headSession     = nullptr; }
+                if (headEnv)         { ort->ReleaseEnv(headEnv);             headEnv         = nullptr; }
+                if (backboneSession) { ort->ReleaseSession(backboneSession); backboneSession = nullptr; }
+                if (backboneEnv)     { ort->ReleaseEnv(backboneEnv);         backboneEnv     = nullptr; }
             }
         }
 
-        // Run one 15600-sample window through yamnet.onnx → [1,521]
-        bool runYamnetWindow(const OrtApi* ort,
-                             OrtMemoryInfo* memInfo,
-                             std::vector<float>& waveform,
-                             float* features521Out) const
+        // Run one window through the backbone (CNN14 or YAMNet) → [backboneDim] embedding.
+        // For CNN14: input shape is [1, windowSamples]; output is [1, 2048].
+        // For YAMNet: input shape is [windowSamples]; output is [1, 521].
+        bool runBackboneWindow(const OrtApi* ort,
+                               OrtMemoryInfo* memInfo,
+                               std::vector<float>& window,
+                               float* embeddingOut) const
         {
-            const int64_t shape[1] = { kYamnetWindowSamples };
-            OrtValue* inputTensor = nullptr;
-            if (ort->CreateTensorWithDataAsOrtValue(memInfo,
-                    waveform.data(), waveform.size() * sizeof(float),
-                    shape, 1,
-                    ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
-                    &inputTensor))
-                return false;
+            const int winSamples = gWindowSamples;
+            const int featDim    = gBackboneDim;
 
-            const char* inNames[]  = { "waveform_binary" };
-            const char* outNames[] = { "tower0/network/layer32/final_output" };
+            // CNN14 expects a 2-D input [1, time]; YAMNet expects 1-D [time].
+            OrtValue* inputTensor = nullptr;
+            if (hasCnn14)
+            {
+                const int64_t shape[2] = { 1, winSamples };
+                if (ort->CreateTensorWithDataAsOrtValue(memInfo,
+                        window.data(), window.size() * sizeof(float),
+                        shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &inputTensor))
+                    return false;
+            }
+            else
+            {
+                const int64_t shape[1] = { winSamples };
+                if (ort->CreateTensorWithDataAsOrtValue(memInfo,
+                        window.data(), window.size() * sizeof(float),
+                        shape, 1, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &inputTensor))
+                    return false;
+            }
+
+            const char* outName = backboneOutputName;
             OrtValue* outTensor = nullptr;
-            OrtStatus* st = ort->Run(yamnetSession, nullptr,
-                                     inNames, (const OrtValue* const*) &inputTensor,
-                                     1, outNames, 1, &outTensor);
+            OrtStatus* st = ort->Run(backboneSession, nullptr,
+                                     &backboneInputName,
+                                     (const OrtValue* const*) &inputTensor,
+                                     1, &outName, 1, &outTensor);
             ort->ReleaseValue(inputTensor);
             if (st) { ort->ReleaseStatus(st); return false; }
 
             float* data = nullptr;
             st = ort->GetTensorMutableData(outTensor, (void**) &data);
             if (!st && data)
-                std::copy(data, data + kYamnetFeatureDim, features521Out);
+                std::copy(data, data + featDim, embeddingOut);
             ort->ReleaseValue(outTensor);
             if (st) { ort->ReleaseStatus(st); return false; }
             return true;
@@ -242,18 +327,17 @@ namespace Detection
         {
             YamnetPrediction out;
             const OrtApi* ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
-            if (!ort || !yamnetSession || mono.getNumChannels() <= 0
+            if (!ort || !backboneSession || mono.getNumChannels() <= 0
                      || mono.getNumSamples() <= 0 || sampleRate <= 0.0)
                 return out;
 
-            // Resample to 16 kHz (nearest-neighbour)
-            const float targetRate = 16000.0f;
-            const int   numIn      = mono.getNumSamples();
-            const float* src       = mono.getReadPointer(0);
-            const double ratio     = targetRate / sampleRate;
-            const int numResampled = (int) std::max(1.0, std::floor(numIn * ratio));
+            // Resample to target rate (32 kHz for CNN14, 16 kHz for YAMNet).
+            const float targetRate   = (float) gTargetRate;
+            const int   numIn        = mono.getNumSamples();
+            const float* src         = mono.getReadPointer(0);
+            const double ratio       = targetRate / sampleRate;
+            const int numResampled   = (int) std::max(1.0, std::floor(numIn * ratio));
 
-            // Build full 16 kHz waveform vector
             std::vector<float> fullWave(static_cast<size_t>(numResampled));
             for (int i = 0; i < numResampled; ++i)
             {
@@ -276,43 +360,33 @@ namespace Detection
             if (ort->CreateCpuMemoryInfo(OrtDeviceAllocator, OrtMemTypeDefault, &memInfo))
                 return out;
 
-            // ── Multi-window inference ───────────────────────────────────────
-            // Slide a 15600-sample window (50 % hop) over the full clip.
-            // Collect per-window 521-d YAMNet features so we can compute
-            // mean + std + max → 1563-d head input (v2 training script).
-            // The std captures temporal variance (hi-hat loops vs snares differ),
-            // the max preserves the strongest transient (critical for kick loops).
-            const int hop = kYamnetWindowSamples / 2;
-            std::vector<float> window(kYamnetWindowSamples, 0.0f);
+            // ── Multi-window inference ────────────────────────────────────────
+            // Slide a backbone-window (50% hop) over the full clip.
+            // Accumulate mean + std + max → FEATURE_DIM-d head input.
+            const int winSamples = gWindowSamples;
+            const int featDim    = gBackboneDim;
+            const int hop        = winSamples / 2;
 
-            // Accumulate statistics for the 1563-d head input.
-            std::vector<float> sumFeats(kYamnetFeatureDim, 0.0f);   // Σ x
-            std::vector<float> sumSqFeats(kYamnetFeatureDim, 0.0f); // Σ x²
-            std::vector<float> maxFeats(kYamnetFeatureDim, 0.0f);   // max x
-
-            // Also keep per-window logits for the max/mean percussive blend
-            // (used as a secondary path when head is running, improves loops).
-#if defined(MAGICFOLDERS_HAS_YAMNET_HEAD)
-            std::array<float, 13> meanLogits {}; meanLogits.fill(0.0f);
-            std::array<float, 13> maxLogits  {}; maxLogits.fill(-1e9f);
-            bool headPerWindowOk = false;
-#endif
+            std::vector<float> window(static_cast<size_t>(winSamples), 0.0f);
+            std::vector<float> sumFeats(static_cast<size_t>(featDim), 0.0f);
+            std::vector<float> sumSqFeats(static_cast<size_t>(featDim), 0.0f);
+            std::vector<float> maxFeats(static_cast<size_t>(featDim), 0.0f);
             int windowCount = 0;
 
             int start = 0;
             do
             {
                 std::fill(window.begin(), window.end(), 0.0f);
-                const int end   = std::min(start + kYamnetWindowSamples, numResampled);
+                const int end   = std::min(start + winSamples, numResampled);
                 const int count = end - start;
                 std::copy(fullWave.begin() + start,
                           fullWave.begin() + start + count,
                           window.begin());
 
-                std::vector<float> feat(kYamnetFeatureDim);
-                if (runYamnetWindow(ort, memInfo, window, feat.data()))
+                std::vector<float> feat(static_cast<size_t>(featDim));
+                if (runBackboneWindow(ort, memInfo, window, feat.data()))
                 {
-                    for (int i = 0; i < kYamnetFeatureDim; ++i)
+                    for (int i = 0; i < featDim; ++i)
                     {
                         const float v = feat[(size_t) i];
                         sumFeats[(size_t) i]   += v;
@@ -332,16 +406,18 @@ namespace Detection
 #if defined(MAGICFOLDERS_HAS_YAMNET_HEAD)
             if (hasHead && headSession)
             {
-                // Build [mean ‖ std ‖ max] = 1563-d feature vector.
-                std::vector<float> headInput(kHeadFeatureDim);
-                for (int i = 0; i < kYamnetFeatureDim; ++i)
+                // Build [mean ‖ std ‖ max] = headFeatureDim-d input for the MLP head.
+                const int headDim = gHeadFeatureDim;
+                const int bd      = gBackboneDim;
+                std::vector<float> headInput(static_cast<size_t>(headDim));
+                for (int i = 0; i < bd; ++i)
                 {
                     const float mean = sumFeats[(size_t) i] / windowCount;
                     const float var  = (sumSqFeats[(size_t) i] / windowCount) - (mean * mean);
                     const float stdv = std::sqrt(std::max(var, 0.0f));
-                    headInput[(size_t) i]                          = mean;
-                    headInput[(size_t) (i + kYamnetFeatureDim)]     = stdv;
-                    headInput[(size_t) (i + 2 * kYamnetFeatureDim)] = maxFeats[(size_t) i];
+                    headInput[(size_t) i]            = mean;
+                    headInput[(size_t) (i + bd)]     = stdv;
+                    headInput[(size_t) (i + 2 * bd)] = maxFeats[(size_t) i];
                 }
 
                 OrtMemoryInfo* hMemInfo = nullptr;
@@ -352,7 +428,7 @@ namespace Detection
                     return out;
                 }
 
-                const int64_t inShape[2] = { 1, kHeadFeatureDim };
+                const int64_t inShape[2] = { 1, (int64_t) headDim };
                 OrtValue* inTensor = nullptr;
                 OrtStatus* st = ort->CreateTensorWithDataAsOrtValue(
                     hMemInfo,
@@ -397,11 +473,14 @@ namespace Detection
                 return out;
             }
 #endif
-            // ── Fallback: average 521-d features → legacy hand-crafted mapping ──
-            std::vector<float> avg521(kYamnetFeatureDim);
-            for (int i = 0; i < kYamnetFeatureDim; ++i)
-                avg521[(size_t) i] = sumFeats[(size_t) i] / windowCount;
-            legacyMapAudioSetToInstrument(avg521.data(), out.logits);
+            // ── Fallback: average backbone features → legacy hand-crafted mapping ──
+            // Only meaningful for YAMNet (521-d). CNN14 (2048-d) would need a
+            // different mapping, but in practice CNN14 always has a head.
+            const int bd = gBackboneDim;
+            std::vector<float> avgFeats(static_cast<size_t>(bd));
+            for (int i = 0; i < bd; ++i)
+                avgFeats[(size_t) i] = sumFeats[(size_t) i] / windowCount;
+            legacyMapAudioSetToInstrument(avgFeats.data(), out.logits);
             out.valid = true;
             return out;
         }

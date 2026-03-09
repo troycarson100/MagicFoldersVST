@@ -130,9 +130,6 @@ private:
     std::unique_ptr<SettingsOverlayComponent> settingsOverlay;
 
     // Playback
-    juce::AudioDeviceManager deviceManager;
-    juce::AudioSourcePlayer sourcePlayer;
-    juce::AudioTransportSource transportSource;
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::String playingFilePath;

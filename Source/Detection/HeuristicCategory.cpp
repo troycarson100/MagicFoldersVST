@@ -106,8 +106,10 @@ namespace HeuristicCategory
             }
             if (result.category == "Textures" || result.category == "Melodic" || result.category == "Other" || result.category == "Loops")
             {
-                if (nameSuggestsGuitar) { result.category = "Guitar"; return; }
-                if (nameSuggestsBass)   { result.category = "Bass"; return; }
+                // Don't override Textures → Guitar/Bass when the filename also
+                // suggests an atmospheric/ambient sound — the texture label wins.
+                if (nameSuggestsGuitar && !nameSuggestsTexture) { result.category = "Guitar"; return; }
+                if (nameSuggestsBass   && !nameSuggestsTexture) { result.category = "Bass"; return; }
             }
             if ((result.category == "Textures" || result.category == "Other" || result.category == "Loops") && nameSuggestsMelodic && !nameSuggestsTexture)
             {
@@ -116,7 +118,8 @@ namespace HeuristicCategory
             }
             if (result.category == "Textures" && nameSuggestsTexture && !nameSuggestsMelodic && !nameSuggestsGuitar && !nameSuggestsBass)
                 return;
-            if (result.category == "Textures" && (nameSuggestsGuitar || nameSuggestsBass || nameSuggestsMelodic))
+            if (result.category == "Textures" && (nameSuggestsGuitar || nameSuggestsBass || nameSuggestsMelodic)
+                && !nameSuggestsTexture)  // atmospheric keywords anchor the Textures label
             {
                 if (nameSuggestsGuitar)      result.category = "Guitar";
                 else if (nameSuggestsBass)  result.category = "Bass";
@@ -133,7 +136,8 @@ namespace HeuristicCategory
 
         if (f.hasSharpAttack && f.centroidF < Heuristic::kKickCentroidMax && f.zcrF < Heuristic::kKickZcrMax)
             result.category = "Kicks";
-        else if (f.zcrF > Heuristic::kHiHatZcrMin && f.rolloffF > Heuristic::kHiHatRolloffMin && f.duration < Heuristic::kHiHatDurationMax)
+        else if (f.zcrF > Heuristic::kHiHatZcrMin && f.rolloffF > Heuristic::kHiHatRolloffMin
+                 && f.centroidF > Heuristic::kHiHatCentroidMin && f.duration < Heuristic::kHiHatDurationMax)
             result.category = "Hi-Hats";
         else if (f.hasSharpAttack && f.centroidF > Heuristic::kSnareCentroidMin && f.centroidF < Heuristic::kSnareCentroidMax)
             result.category = "Snares";
@@ -150,12 +154,16 @@ namespace HeuristicCategory
         else if (f.type == "Loop" && isGuitarLikeLoop(f.isTonal, f.hasSharpAttack, f.duration, f.centroidF, f.zcrF, f.onsetCount))
             result.category = "Guitar";
         else if (f.isTonal && f.centroidF >= Heuristic::kGuitarTonalCentroidMin && f.centroidF <= Heuristic::kGuitarTonalCentroidMax
+                 && f.zcrF < Heuristic::kGuitarZcrMaxRhythm  // atmospheric pads/textures have very low ZCR and still fail this
+                 && f.onsetCount >= 2                         // sustained drones with zero onsets are not guitar
                  && (!f.hasSharpAttack || (f.type == "Loop" && f.onsetCount >= Heuristic::kGuitarTonalOnsetMin && f.onsetCount <= Heuristic::kGuitarTonalOnsetMax)))
             result.category = "Guitar";
         else if (!f.hasSharpAttack && f.isTonal && f.mfcc2 > 0.0f)
             result.category = "Melodic";
         else if (f.type == "Loop" && f.isTonal && f.centroidF >= Heuristic::kGuitarTonalCentroidMin && f.centroidF <= Heuristic::kGuitarTonalCentroidMax
-                 && f.zcrF < Heuristic::kGuitarTonalZcrMax && f.onsetCount >= Heuristic::kGuitarTonalOnsetMin && f.onsetCount <= Heuristic::kGuitarTonalOnsetMax2)
+                 && f.zcrF < Heuristic::kGuitarTonalZcrMax && f.onsetCount >= Heuristic::kGuitarTonalOnsetMin && f.onsetCount <= Heuristic::kGuitarTonalOnsetMax2
+                 && f.zcrF < Heuristic::kGuitarZcrMaxRhythm  // exclude slow atmospheric loops (pads/textures have ZCR near 0)
+                 && f.onsetCount >= 2)                        // at least 2 onsets — sustained drone loops are not guitar
             result.category = "Guitar";
         else if (f.type == "Loop")
         {

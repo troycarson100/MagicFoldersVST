@@ -10,10 +10,13 @@ namespace Heuristic
     constexpr float kSnareCentroidMin  = 800.0f;
     constexpr float kSnareCentroidMax  = 3000.0f;
 
-    // Hi-hat: high ZCR, bright, very short
+    // Hi-hat: high ZCR, bright, very short, and very high spectral centroid.
+    // Real hi-hats sit at 4000–12000 Hz centroid; snares typically at 800–3000 Hz.
+    // The centroid floor prevents bright snares from misfiring as Hi-Hat.
     constexpr float kHiHatZcrMin       = 0.20f;
     constexpr float kHiHatRolloffMin   = 4000.0f;
     constexpr float kHiHatDurationMax  = 0.8f;
+    constexpr float kHiHatCentroidMin  = 4000.0f;
 
     // Bass: very low centroid, no sharp attack, dark MFCC
     constexpr float kBassCentroidMax   = 600.0f;
