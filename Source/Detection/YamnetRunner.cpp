@@ -170,8 +170,22 @@ namespace Detection
             OrtSessionOptions* opts = nullptr;
             if (ort->CreateSessionOptions(&opts)) return;
 
-            // ── 1a. Try CNN14 backbone (preferred — stored on disk) ──────────
-            juce::File cnn14File = modelDir.getChildFile("cnn14_backbone.onnx");
+            // ── 1a. Try CNN14 backbone ────────────────────────────────────────
+            // Priority 1: bundle Resources (self-contained install for end users).
+            //   Binary lives at: Contents/MacOS/<name>
+            //   Resources live at: Contents/Resources/
+            //   So we go up two levels from the binary to the bundle root.
+            juce::File bundleCnn14 = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+                                         .getParentDirectory()   // MacOS/
+                                         .getParentDirectory()   // Contents/
+                                         .getParentDirectory()   // <bundle root>
+                                         .getChildFile("Contents/Resources/cnn14_backbone.onnx");
+
+            // Priority 2: Application Support (backward compat / developer install).
+            juce::File cnn14File = bundleCnn14.existsAsFile()
+                                       ? bundleCnn14
+                                       : modelDir.getChildFile("cnn14_backbone.onnx");
+
             if (cnn14File.existsAsFile())
             {
                 const juce::String cnn14Path = cnn14File.getFullPathName();

@@ -147,3 +147,73 @@ target_link_libraries(MagicFolders PRIVATE
     juce::juce_recommended_warning_flags
     ${ESSENTIA_DIR}/build/src/libessentia.a
 )
+
+# ─── Self-contained bundle: embed ONNX Runtime dylib + CNN14 model ────────────
+#
+# Without this, the plugin loads ONNX Runtime via an absolute @rpath that only
+# exists on the developer's machine, and CNN14 is read from the developer's
+# ~/Library/Application Support. Neither works for end users.
+#
+# Strategy:
+#   • Copy libonnxruntime.1.20.0.dylib → Contents/Frameworks/ inside every
+#     plugin bundle (AU, VST3, Standalone app).
+#   • Add @loader_path/../Frameworks to the binary's RPATH so macOS resolves
+#     the @rpath reference to the bundled copy (no user install required).
+#   • Copy cnn14_backbone.onnx → Contents/Resources/ inside every bundle.
+#     YamnetRunner.cpp checks this location first before Application Support.
+#   • JUCE's COPY_PLUGIN_AFTER_BUILD runs BEFORE these post-build commands
+#     (it is registered inside juce_add_plugin). We therefore do a second
+#     system copy at the END so the installed plugin is always fully embedded.
+#
+if(ONNXRUNTIME_ROOT AND APPLE)
+    set(ORT_DYLIB  "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.1.20.0.dylib")
+    set(CNN14_ONNX "${CMAKE_SOURCE_DIR}/training/cnn14_backbone.onnx")
+
+    # ── Bake @loader_path/../Frameworks into the RPATH at link time ───────────
+    # This supplements the existing third_party absolute RPATH so the bundled
+    # dylib is found on end-user machines (which don't have third_party/).
+    foreach(PLUGIN_TARGET MagicFolders_AU MagicFolders_VST3 MagicFolders_Standalone)
+        set_property(TARGET ${PLUGIN_TARGET} APPEND PROPERTY
+            BUILD_RPATH "@loader_path/../Frameworks")
+    endforeach()
+
+    foreach(PLUGIN_TARGET MagicFolders_AU MagicFolders_VST3 MagicFolders_Standalone)
+        # ── Embed ONNX Runtime dylib ─────────────────────────────────────────
+        add_custom_command(TARGET ${PLUGIN_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:${PLUGIN_TARGET}>/Contents/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_DYLIB}"
+                "$<TARGET_BUNDLE_DIR:${PLUGIN_TARGET}>/Contents/Frameworks/libonnxruntime.1.20.0.dylib"
+            COMMENT "Embedding ONNX Runtime dylib into ${PLUGIN_TARGET}")
+
+        # ── Embed CNN14 model ────────────────────────────────────────────────
+        if(EXISTS "${CNN14_ONNX}")
+            add_custom_command(TARGET ${PLUGIN_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "$<TARGET_BUNDLE_DIR:${PLUGIN_TARGET}>/Contents/Resources"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CNN14_ONNX}"
+                    "$<TARGET_BUNDLE_DIR:${PLUGIN_TARGET}>/Contents/Resources/cnn14_backbone.onnx"
+                COMMENT "Embedding CNN14 model (308 MB) into ${PLUGIN_TARGET} — one-time copy")
+        endif()
+    endforeach()
+
+    # ── Re-install fully-embedded bundles to system plugin folders ────────────
+    # JUCE's COPY_PLUGIN_AFTER_BUILD ran before our embedding steps (it is
+    # registered inside juce_add_plugin), so the first system copy is missing
+    # Frameworks/ and Resources/. We do a second merge-copy using cmake -E
+    # copy_directory which handles spaces in paths and merges new files without
+    # deleting anything already installed by JUCE's step.
+    add_custom_command(TARGET MagicFolders_AU POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:MagicFolders_AU>"
+            "$ENV{HOME}/Library/Audio/Plug-Ins/Components/Magic Folders.component"
+        COMMENT "Re-installing fully-embedded AU to system plugins folder")
+
+    add_custom_command(TARGET MagicFolders_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:MagicFolders_VST3>"
+            "$ENV{HOME}/Library/Audio/Plug-Ins/VST3/Magic Folders.vst3"
+        COMMENT "Re-installing fully-embedded VST3 to system plugins folder")
+endif()
