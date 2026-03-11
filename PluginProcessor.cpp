@@ -6,10 +6,38 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <essentia/essentia.h>
 #include <essentia/algorithmfactory.h>
 #include <essentia/essentiamath.h>
 #include <essentia/pool.h>
+
+// ─── Essentia global-init singleton ──────────────────────────────────────────
+// Essentia registers algorithms into a global factory. Calling init() more than
+// once causes "Overwriting registered algorithm" spam and is wasteful. Calling
+// shutdown() while another instance is still alive crashes. We ref-count so:
+//   • first instance calls init() once
+//   • last instance calls shutdown() once
+//   • all others are no-ops
+namespace
+{
+    std::mutex    essentiaInitMutex;
+    int           essentiaRefCount = 0;
+
+    void essentiaAddRef()
+    {
+        std::lock_guard<std::mutex> lock(essentiaInitMutex);
+        if (essentiaRefCount++ == 0)
+            essentia::init();
+    }
+
+    void essentiaRelease()
+    {
+        std::lock_guard<std::mutex> lock(essentiaInitMutex);
+        if (--essentiaRefCount == 0)
+            essentia::shutdown();
+    }
+}
 
 using namespace essentia;
 using namespace essentia::standard;
@@ -146,14 +174,14 @@ MagicFoldersProcessor::MagicFoldersProcessor()
     // Run the read-ahead thread at high priority so the buffer stays full even at
     // small host buffer sizes. Normal priority caused read starvation in Ableton.
     previewReadAheadThread.startThread(juce::Thread::Priority::high);
-    essentia::init();
+    essentiaAddRef();
 }
 
 MagicFoldersProcessor::~MagicFoldersProcessor()
 {
     stopPreview();
     previewReadAheadThread.stopThread(2000);
-    essentia::shutdown();
+    essentiaRelease();
 }
 
 void MagicFoldersProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)

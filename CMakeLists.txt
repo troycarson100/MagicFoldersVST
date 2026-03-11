@@ -4,15 +4,17 @@ project(MagicFolders VERSION 1.0.0)
 add_subdirectory(JUCE)
 
 juce_add_plugin(MagicFolders
-    COMPANY_NAME "YourName"
+    COMPANY_NAME "Sample Roll"
+    COMPANY_WEBSITE "https://sampleroll.com"
+    BUNDLE_ID "com.sampleroll.magicfolders"
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    PLUGIN_MANUFACTURER_CODE Smpl
-    PLUGIN_CODE Sorg
+    PLUGIN_MANUFACTURER_CODE SmRl
+    PLUGIN_CODE MgFl
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "Magic Folders"
 )

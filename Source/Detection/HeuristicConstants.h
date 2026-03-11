@@ -18,8 +18,12 @@ namespace Heuristic
     constexpr float kKickZcrMax        = 0.20f;
 
     // Snare: mid centroid range, starts above kick max to avoid overlap.
+    // ZCR minimum separates snares from bright electronic kicks — kicks have
+    // compact low-mid transients (ZCR < 0.08) while snares/claps carry
+    // high-frequency noise content (ZCR ≥ 0.08).
     constexpr float kSnareCentroidMin  = 1400.0f;
     constexpr float kSnareCentroidMax  = 4000.0f;
+    constexpr float kSnareZcrMin       = 0.08f;
 
     // Hi-hat: high ZCR, bright, very short, and very high spectral centroid.
     // Real hi-hats sit at 4000–12000 Hz centroid; snares typically at 800–3000 Hz.

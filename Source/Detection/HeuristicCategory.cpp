@@ -156,7 +156,11 @@ namespace HeuristicCategory
         else if (f.zcrF > Heuristic::kHiHatZcrMin && f.rolloffF > Heuristic::kHiHatRolloffMin
                  && f.centroidF > Heuristic::kHiHatCentroidMin && f.duration < Heuristic::kHiHatDurationMax)
             result.category = "Hi-Hats";
-        else if (f.hasSharpAttack && f.centroidF > Heuristic::kSnareCentroidMin && f.centroidF < Heuristic::kSnareCentroidMax)
+        // Snare rule — require a ZCR floor so that bright/punchy electronic kicks
+        // (high centroid but compact, low-noise transient: ZCR < 0.08) don't land
+        // here. Real snares and claps have broadband high-frequency noise → ZCR ≥ 0.08.
+        else if (f.hasSharpAttack && f.centroidF > Heuristic::kSnareCentroidMin && f.centroidF < Heuristic::kSnareCentroidMax
+                 && f.zcrF >= Heuristic::kSnareZcrMin)
             result.category = "Snares";
         else if (f.centroidF < Heuristic::kBassCentroidMax && !f.hasSharpAttack && f.mfcc1 < Heuristic::kBassMfcc1Max)
             result.category = "Bass";
@@ -166,7 +170,12 @@ namespace HeuristicCategory
             if (brightness >= Heuristic::kFxBrightnessMin)
                 result.category = "FX";
         }
-        else if (f.hasSharpAttack && f.duration < Heuristic::kPercDurationMax)
+        // Percussion: short + sharp attack that didn't match any specific drum type.
+        // Also catch very short transients (< 0.3 s) even without a "sharp attack"
+        // score — clicks, ticks, and micro-perc sounds always belong here rather
+        // than "Other", which is a dead-end bucket users find confusing.
+        else if ((f.hasSharpAttack && f.duration < Heuristic::kPercDurationMax)
+                 || (!f.isTonal && f.duration < 0.3))
             result.category = "Percussion";
         else if (f.type == "Loop" && isGuitarLikeLoop(f.isTonal, f.hasSharpAttack, f.duration, f.centroidF, f.zcrF, f.onsetCount))
             result.category = "Guitar";
@@ -192,10 +201,19 @@ namespace HeuristicCategory
             else if (f.isTonal)
                 result.category = "Melodic";
             else
-                result.category = "Other";
+                // Non-tonal, non-texture loop (e.g. drum loop that slipped through).
+                // Percussion is a better default than "Other" since it keeps it
+                // visible and CNN14 can still refine it to a specific drum category.
+                result.category = "Percussion";
         }
         else
-            result.category = "Other";
+        {
+            // One-shot that cleared every specific rule.
+            // Rather than dumping everything into "Other" (a dead-end bucket),
+            // make a best-effort guess: tonal → Melodic, non-tonal → Percussion.
+            // CNN14 will still override this if it has a confident alternative.
+            result.category = f.isTonal ? "Melodic" : "Percussion";
+        }
 
         const juce::String catFromFile = categoryFromFilename(file.getFileNameWithoutExtension());
         if (catFromFile.isNotEmpty())
